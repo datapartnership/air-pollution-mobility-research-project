@@ -3,8 +3,8 @@ requires = ["hatchling>=1.21.0", "hatch-vcs>=0.3.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "template"
-description = "A template Python package from the World Bank Data Lab"
+name = "air-pollution-mobility-research-project"
+description = "Research Project with Imperial College London and World Bank Data Lab"
 readme = { file = "README.md", content-type = "text/markdown" }
 license = { file = "LICENSE" }
 keywords = ["template", "reproducibility"]
@@ -38,9 +38,9 @@ docs = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/worldbank/template"
-"Bug Reports" = "https://github.com/worldbank/template/issues"
-"Source" = "https://github.com/worldbank/template"
+"Homepage" = "https://github.com/datapartnership/air-pollution-mobility-research-project"
+"Bug Reports" = "https://github.com/datapartnership/air-pollution-mobility-research-project/issues"
+"Source" = "https://github.com/datapartnership/air-pollution-mobility-research-project"
 
 [tool.codespell]
 skip = 'docs/_build,docs/bibliography.bib,*.png,*.gz,*.whl'

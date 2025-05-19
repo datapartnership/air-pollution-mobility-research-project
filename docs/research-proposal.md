@@ -1,4 +1,4 @@
-# Air Pollution and Economic Activity  
+# Research Proposal: Air Pollution and Economic Activity
 
  
 
