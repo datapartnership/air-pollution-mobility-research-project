@@ -2,7 +2,21 @@ format: jb-book
 root: README
 
 parts:
-  - caption: Examples
-    numbered: True
+  - caption: Project Materials
     chapters:
-      - file: notebooks/research-proposal.md
+      - file: docs/research-proposal.md
+      - file: docs/gallery.md
+      - file: docs/project-timeline.md
+  - caption: Relevant Packages
+    chapters:
+      - url: https://github.com/datapartnership/wazeasy
+        title: Wazeeasy
+        external: True
+  - caption: Working with GitHub
+    chapters:
+      - file: docs/folder-and-naming.md
+      - file: docs/presenting-results.md
+      - file: docs/notebooks-workflows.md
+      - file: docs/git-workflows.md
+
+      
