@@ -1,9 +1,17 @@
 """
 OSM → Mesh enrichment utility
 ─────────────────────────────
-This version handles both raw OSM fields (e.g., highway, amenity, shop, landuse)
-and Geofabrik “*-latest-free.shp” extracts where many tags collapse into 'fclass'.
-Each function is documented inline to explain its purpose and logic.
+This version handles both:
+  • Raw OSM shapefiles that contain separate layers for roads, POIs, land‐use  
+    (e.g. Geofabrik “ethiopia-latest-free” directory)
+  • Single-layer OSM shapefiles that collapse many tags into 'fclass'.
+
+We always:
+  1. Read the correct sub-shapefiles (roads, pois, landuse) if `osm_shapefile` is a directory.
+  2. Read a single-layer shapefile if `osm_shapefile` is a .shp file.
+  3. Operate in EPSG:4326 for all geometry reads & writes.
+  4. Temporarily project to EPSG:3857 to compute lengths (for roads) or areas (for land‐use).
+  5. Return the final enriched mesh in EPSG:4326.
 """
 
 from pathlib import Path
@@ -40,158 +48,184 @@ def _pick_column(gdf: gpd.GeoDataFrame, candidates: List[str]) -> str:
     for col in candidates:
         if col in gdf.columns:
             return col
-    # If we reach here, none of the candidates were found
     raise ValueError(
         f"None of the columns {candidates} found in the supplied OSM layer. "
         f"Available columns: {list(gdf.columns)[:20]}…"
     )
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Load OSM layers into Roads, POIs, and Land-use GeoDataFrames
+# Load OSM layers: roads, POIs, and land‐use
 # ─────────────────────────────────────────────────────────────────────────────
 def load_osm_layers(osm_shapefile: Path) -> dict:
     """
-    Read a Geofabrik theme-shapefile (or any OSM-derived shapefile)
-    and split it into three GeoDataFrames:
-      • roads   – LineString / MultiLineString where highway/fclass ∈ major classes
-      • pois    – Point geometries with amenity/shop/fclass matching at least some valid value
-      • landuse – Polygon geometries whose `landuse` or `fclass` column is not null
+    Which file(s) we read depends on whether `osm_shapefile` is:
+      • a directory (Geofabrik-style containing separate '*roads*.shp', '*poi*.shp', '*landuse*.shp')
+      • a single `.shp` file that must be split by tags.
 
-    If a raw OSM shapefile with 'highway', 'amenity', 'shop', 'landuse' columns is passed,
-    those will be used. If the shapefile only has 'fclass' (common for Geofabrik extracts),
-    that single column will be used to identify roads, POIs, and land-use categories.
-
-    Parameters
-    ----------
-    osm_shapefile : Path
-        Path to the OSM-derived shapefile (e.g., 'ethiopia-latest-free.shp').
-
-    Returns
-    -------
-    dict
-        A dictionary containing three GeoDataFrames:
-          - "roads":    Road segments (LineString/MultiLineString)
-          - "pois":     Point-of-interest points (Point)
-          - "landuse":  Land-use polygons (Polygon/MultiPolygon)
+    Returns a dict with GeoDataFrames for "roads", "pois", and "landuse".
     """
-    # Read the full shapefile into a GeoDataFrame
-    gdf = gpd.read_file(str(osm_shapefile))
 
-    # Ensure the coordinate reference system is EPSG:4326
-    if gdf.crs is None or gdf.crs.to_epsg() != 4326:
-        gdf = gdf.to_crs("EPSG:4326")
+    # If `osm_shapefile` is a directory, look for the three relevant sub-shapefiles:
+    if osm_shapefile.is_dir():
+        # 1) Find "*roads*.shp"
+        roads_path = next(osm_shapefile.glob("*roads*.shp"), None)
+        # 2) Find "*poi*.shp"  (Geofabrik uses "poi" or "pois")
+        pois_path  = next(osm_shapefile.glob("*poi*.shp"), None)
+        # 3) Find "*landuse*.shp"
+        landuse_path = next(osm_shapefile.glob("*landuse*.shp"), None)
 
-    # Identify which column holds road categories: either 'highway' or fallback to 'fclass'
-    road_attr = _pick_column(gdf, ["highway", "fclass"])
-    # Identify if 'amenity' exists; else, we may rely on 'shop' or 'fclass'
-    amenity_col = "amenity" if "amenity" in gdf.columns else None
-    shop_col = "shop" if "shop" in gdf.columns else None
-    # Identify land-use column: either 'landuse' or fallback to 'fclass'
-    land_col = _pick_column(gdf, ["landuse", "fclass"])
+        if roads_path is None or pois_path is None or landuse_path is None:
+            raise FileNotFoundError(
+                f"Could not locate 'roads', 'poi', and 'landuse' .shp files under {osm_shapefile}.\n"
+                f"Ensure the directory contains at least one '*roads*.shp', one '*poi*.shp', and one '*landuse*.shp'."
+            )
 
-    # ――― ① Extract Roads ―――
-    # Define major highway classes that we care about
-    road_classes = ["motorway", "trunk", "primary", "secondary", "tertiary"]
-    # Filter rows where geometry is a line and the attribute matches one of our road_classes
-    gdf_roads = gdf[
-        (gdf.geometry.type.isin(["LineString", "MultiLineString"])) &
-        (gdf[road_attr].isin(road_classes))
-    ].copy()
+        # Read each layer in EPSG:4326
+        gdf_roads = gpd.read_file(str(roads_path)).to_crs("EPSG:4326")
+        gdf_pois  = gpd.read_file(str(pois_path )).to_crs("EPSG:4326")
+        gdf_land  = gpd.read_file(str(landuse_path)).to_crs("EPSG:4326")
 
-    # ――― ② Extract POIs ―――
-    # Start with all points
-    poi_mask = gdf.geometry.type.eq("Point")
-    if amenity_col:
-        # If 'amenity' exists, keep points having any non-null amenity
-        poi_mask &= gdf[amenity_col].notna()
-    elif shop_col:
-        # Else if 'shop' exists, keep points having any non-null shop
-        poi_mask &= gdf[shop_col].notna()
+        # ─── Harmonize POI columns ───────────────────────────────────────────────
+        # Some POI shapefiles supply columns "amenity" or "shop" or both; else they collapse into "fclass".
+        if "amenity" not in gdf_pois.columns:
+            # If no "amenity", create empty amenity column
+            gdf_pois["amenity"] = None
+        if "shop" not in gdf_pois.columns:
+            # If no "shop", create empty shop column
+            gdf_pois["shop"] = None
+        if "fclass" not in gdf_pois.columns:
+            # If no "fclass" column, create an empty one
+            gdf_pois["fclass"] = None
+
+        # ─── Harmonize Landuse column ─────────────────────────────────────────────
+        # If the landuse shapefile has "landuse", keep it. Otherwise
+        # if it only has "fclass", rename that to "landuse".
+        if "landuse" in gdf_land.columns:
+            # Nothing to do
+            pass
+        elif "fclass" in gdf_land.columns:
+            # Rename fclass → landuse
+            gdf_land = gdf_land.rename(columns={"fclass": "landuse"})
+        else:
+            # Neither 'landuse' nor 'fclass' exist → error
+            raise KeyError(
+                f"The shapefile {landuse_path.name} must contain either a 'landuse' or 'fclass' column."
+            )
+
+        # Rename the roads attribute (often "highway" or "fclass") to "fclass"
+        road_attr = _pick_column(gdf_roads, ["highway", "fclass"])
+        if road_attr != "fclass":
+            gdf_roads = gdf_roads.rename(columns={road_attr: "fclass"})
+
     else:
-        # Otherwise, fall back to any point that has a non-null fclass
-        poi_mask &= gdf[road_attr].notna()
+        # If `osm_shapefile` is a single .shp, we must split by tags in one layer:
+        gdf = gpd.read_file(str(osm_shapefile)).to_crs("EPSG:4326")
 
-    gdf_pois = gdf[poi_mask].copy()
+        # Identify columns for roads vs. POIs vs. land-use
+        road_attr    = _pick_column(gdf, ["highway", "fclass"])
+        amenity_col  = "amenity" if "amenity" in gdf.columns else None
+        shop_col     = "shop"    if "shop"    in gdf.columns else None
+        land_attr    = _pick_column(gdf, ["landuse", "fclass"])
 
-    # ――― ③ Extract Land-use Polygons ―――
-    # Keep only Polygon/MultiPolygon geometries with a non-null landuse
-    landuse_mask = (
-        gdf.geometry.type.isin(["Polygon", "MultiPolygon"]) &
-        gdf[land_col].notna()
-    )
-    gdf_land = gdf[landuse_mask].copy()
+        # ─── Extract Roads ───────────────────────────────────────────────────────
+        road_classes = ["motorway", "trunk", "primary", "secondary", "tertiary"]
+        gdf_roads = gdf[
+            (gdf.geometry.type.isin(["LineString", "MultiLineString"])) &
+            (gdf[road_attr].isin(road_classes))
+        ].copy()
+        # Rename whichever column we picked as "fclass"
+        gdf_roads = gdf_roads.rename(columns={road_attr: "fclass"})
 
-    # ――― ④ Harmonise Column Names ―――
-    # Rename whichever column we picked for roads to 'fclass' so downstream code is uniform
-    gdf_roads.rename(columns={road_attr: "fclass"}, inplace=True)
+        # ─── Extract POIs ────────────────────────────────────────────────────────
+        poi_mask = gdf.geometry.type.eq("Point")
+        if amenity_col:
+            poi_mask &= gdf[amenity_col].notna()
+        elif shop_col:
+            poi_mask &= gdf[shop_col].notna()
+        else:
+            poi_mask &= gdf[road_attr].notna()
 
-    # For POIs, ensure we have both 'amenity' and 'shop' columns (fill with None if missing)
-    if amenity_col:
-        gdf_pois.rename(columns={amenity_col: "amenity"}, inplace=True)
-    if shop_col:
-        # If 'shop' exists, rename it; if not, create an empty 'shop' column
-        if shop_col in gdf_pois.columns:
-            gdf_pois.rename(columns={shop_col: "shop"}, inplace=True)
+        gdf_pois = gdf[poi_mask].copy()
+
+        # Harmonize POI columns:
+        if amenity_col:
+            gdf_pois = gdf_pois.rename(columns={amenity_col: "amenity"})
+        else:
+            gdf_pois["amenity"] = None
+
+        if shop_col:
+            gdf_pois = gdf_pois.rename(columns={shop_col: "shop"})
         else:
             gdf_pois["shop"] = None
 
-    # For land-use, rename that column to 'landuse'
-    gdf_land.rename(columns={land_col: "landuse"}, inplace=True)
+        if "fclass" not in gdf_pois.columns:
+            # If we never had a "fclass" column, create an empty one
+            gdf_pois["fclass"] = None
 
+        # ─── Extract Land‐use Polygons ───────────────────────────────────────────
+        landuse_mask = (
+            gdf.geometry.type.isin(["Polygon", "MultiPolygon"]) &
+            gdf[land_attr].notna()
+        )
+        gdf_land = gdf[landuse_mask].copy()
+
+        # Rename the land‐use column to "landuse"
+        if land_attr != "landuse":
+            gdf_land = gdf_land.rename(columns={land_attr: "landuse"})
+
+        # Finally, ensure roads/pois/landuse are all in EPSG:4326
+        gdf_roads = gdf_roads.to_crs("EPSG:4326")
+        gdf_pois  = gdf_pois.to_crs("EPSG:4326")
+        gdf_land  = gdf_land.to_crs("EPSG:4326")
+
+    # Return the three prepared GeoDataFrames
     return {"roads": gdf_roads, "pois": gdf_pois, "landuse": gdf_land}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Summarise road metrics per mesh cell
 # ─────────────────────────────────────────────────────────────────────────────
 def summarise_roads(gdf_roads: gpd.GeoDataFrame, mesh: gpd.GeoDataFrame) -> pd.DataFrame:
     """
-    For each mesh cell (identified by mesh.geom_id), compute:
-      - road_len: total length of road within that cell (in metres)
-      - road_share: fraction of this cell's road_len relative to the sum of all road length in the study area
+    For each mesh cell (mesh.geom_id), compute:
+      • road_len:   total length of road within that cell (in metres)
+      • road_share: cell_road_len / total_network_length
 
     Steps:
-      1. Reproject both roads and mesh to EPSG:3857 (metre-based) for accurate length calculations.
-      2. Overlay roads and mesh polygons to get the intersection pieces.
-      3. Compute the length of each intersected piece.
-      4. Sum lengths per mesh.geom_id to obtain road_len.
-      5. Divide each cell's road_len by the total to get road_share.
+      1. Reproject both to EPSG:3857 to measure lengths in metres.
+      2. Overlay to get clipped segments for each mesh cell.
+      3. Compute segment lengths, sum by geom_id.
+      4. Compute road_share.
 
-    Parameters
-    ----------
-    gdf_roads : GeoDataFrame
-        Road segments with geometry in EPSG:4326.
-    mesh : GeoDataFrame
-        The empty mesh containing 'geom_id' and geometry, in EPSG:4326.
-
-    Returns
-    -------
-    DataFrame
-        Indexed by geom_id, with columns:
-          - 'road_len' (metres)
-          - 'road_share' (unitless fraction)
+    Returns a DataFrame indexed by geom_id with columns ['road_len','road_share'].
     """
-    # 1) Reproject to EPSG:3857 (metre-based) for accurate length ops
-    roads_m = gdf_roads.to_crs(3857)
-    mesh_m = mesh.to_crs(3857)
+    # 1) Reproject to metres
+    roads_m = gdf_roads.to_crs("EPSG:3857")
+    mesh_m  = mesh.to_crs("EPSG:3857")
 
-    # 2) Compute intersection overlay: splits road segments by mesh polygons
-    overlay = gpd.overlay(roads_m, mesh_m[["geom_id", "geometry"]], how="intersection")
+    # 2) Intersection overlay: splits each road by the cell it falls in
+    overlay = gpd.overlay(
+        roads_m,
+        mesh_m[["geom_id", "geometry"]],
+        how="intersection"
+    )
 
-    # 3) Compute each intersected segment's length in metres
+    # 3) Compute each clipped segment's length (m)
     overlay["seg_len"] = overlay.geometry.length
 
-    # 4) Group by geom_id and sum seg_len to get total road length per cell
+    # 4) Sum seg_len by geom_id → 'road_len'
     road_by_cell = overlay.groupby("geom_id")["seg_len"].sum().to_frame("road_len")
 
-    # 5) Compute share relative to the overall sum
-    total_len = road_by_cell["road_len"].sum()
+    # 5) Compute road_share = road_len / total_len
+    total_len = float(road_by_cell["road_len"].sum())
     if total_len > 0:
         road_by_cell["road_share"] = road_by_cell["road_len"] / total_len
     else:
-        # If no roads found, set share to 0
         road_by_cell["road_share"] = 0.0
 
     return road_by_cell.fillna(0)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Summarise POI metrics per mesh cell
@@ -202,55 +236,44 @@ def summarise_pois(
     relevant_poi: List[str]
 ) -> pd.DataFrame:
     """
-    Filter POIs to keep only those whose 'amenity', 'shop', or 'fclass' value
-    is in `relevant_poi`. Then count how many such POIs fall within each mesh cell,
-    and compute the fraction relative to the total count.
+    For each mesh cell (mesh.geom_id), compute:
+      • poi_count: number of relevant POIs within that cell
+      • poi_share: poi_count / total_relevant_poi_count
 
     Steps:
-      1. Create a boolean mask to filter POIs by checking 'amenity', 'shop', or 'fclass'.
-      2. Spatially join filtered POIs to mesh polygons (point-in-polygon).
-      3. Count the number of POIs per geom_id → 'poi_count'.
-      4. Divide each cell's poi_count by the overall sum to get 'poi_share'.
+      1. Build a mask for relevant POIs (amenity/shop/fclass ∈ relevant_poi).
+      2. Spatially join points → mesh (predicate="within").
+      3. Count by geom_id, compute poi_share.
 
-    Parameters
-    ----------
-    gdf_pois : GeoDataFrame
-        POI points (geometry type = Point) in EPSG:4326.
-    mesh : GeoDataFrame
-        The mesh containing 'geom_id' and geometry, in EPSG:4326.
-    relevant_poi : list[str]
-        List of tag values (e.g. ["supermarket", "hospital", ...]) to include.
-
-    Returns
-    -------
-    DataFrame
-        Indexed by geom_id, with columns:
-          - 'poi_count' (integer)
-          - 'poi_share' (unitless fraction)
+    Returns a DataFrame indexed by geom_id with columns ['poi_count','poi_share'].
     """
-    # 1) Build a boolean mask for relevant POIs
-    #    If 'amenity' or 'shop' columns exist, check them first; else use 'fclass'
+    # 1) Build boolean mask
     if {"amenity", "shop"} & set(gdf_pois.columns):
         mask = (
-            gdf_pois.get("amenity", pd.Series(dtype=str)).isin(relevant_poi) |
-            gdf_pois.get("shop",    pd.Series(dtype=str)).isin(relevant_poi)
+            gdf_pois["amenity"].isin(relevant_poi) |
+            gdf_pois["shop"].isin(relevant_poi)
         )
     else:
-        # Fall back to matching on 'fclass' column
         mask = gdf_pois["fclass"].isin(relevant_poi)
 
     filtered = gdf_pois[mask].copy()
 
-    # 2) Spatial join: assign each filtered POI to the mesh cell it falls within
-    pois4326 = filtered.set_geometry("geometry").to_crs(4326)
-    mesh4326 = mesh[["geom_id", "geometry"]].set_geometry("geometry").to_crs(4326)
-    joined = gpd.sjoin(pois4326, mesh4326, how="inner", predicate="within")
+    # 2) Spatial join (point‐in‐polygon) to assign each POI → geom_id
+    pois4326 = filtered.to_crs("EPSG:4326")
+    mesh4326 = mesh[["geom_id", "geometry"]].set_geometry("geometry").to_crs("EPSG:4326")
 
-    # 3) Count POIs per geom_id
+    joined = gpd.sjoin(
+        pois4326,
+        mesh4326,
+        how="inner",
+        predicate="within"
+    )
+
+    # 3) Count by geom_id → poi_count
     poi_counts = joined.groupby("geom_id").size().to_frame("poi_count")
 
-    # 4) Compute poi_share by dividing by the total count
-    total_poi = poi_counts["poi_count"].sum()
+    # 4) Compute poi_share
+    total_poi = float(poi_counts["poi_count"].sum())
     if total_poi > 0:
         poi_counts["poi_share"] = poi_counts["poi_count"] / total_poi
     else:
@@ -258,8 +281,9 @@ def summarise_pois(
 
     return poi_counts.fillna(0)
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Summarise land-use metrics per mesh cell
+# Summarise land‐use metrics per mesh cell
 # ─────────────────────────────────────────────────────────────────────────────
 def summarise_landuse(
     gdf_land: gpd.GeoDataFrame,
@@ -267,100 +291,76 @@ def summarise_landuse(
     lu_classes: List[str]
 ) -> pd.DataFrame:
     """
-    For each land-use class in `lu_classes`, compute:
-      - 'lu_{class}_area': total area of that class within each mesh cell (m²)
-      - 'lu_{class}_share': fraction of that class's area in this cell relative
-                            to the total area of that class across all cells.
+    For each land‐use class in `lu_classes`, compute per mesh cell:
+      • lu_{class}_area  (total area in m²)
+      • lu_{class}_share (share = area_cell / total_area_class)
 
     Steps:
-      1. Reproject both gdf_land and mesh to EPSG:3857 (metre-based) to compute areas.
+      1. Reproject `gdf_land` & `mesh` to EPSG:3857 for area computations.
       2. For each class:
-         a. Subset polygons where 'landuse' == class.
-         b. Overlay subset with mesh to get intersection pieces.
-         c. Compute area of each piece.
-         d. Sum area per geom_id → 'lu_{class}_area'.
-         e. Divide by total area for that class to get 'lu_{class}_share'.
-      3. Concatenate results for all classes into one DataFrame.
+         a. Subset polygons where gdf_land["landuse"] == cls.
+         b. Overlay subset with mesh_m to get clipped pieces.
+         c. Compute piece_area = geometry.area.
+         d. Sum piece_area by geom_id → lu_{cls}_area.
+         e. Compute lu_{cls}_share = lu_{cls}_area / total_area_cls.
+      3. Concatenate all class results horizontally.
 
-    Parameters
-    ----------
-    gdf_land : GeoDataFrame
-        Land-use polygons with 'landuse' column, in EPSG:4326.
-    mesh : GeoDataFrame
-        The mesh containing 'geom_id' and geometry, in EPSG:4326.
-    lu_classes : list[str]
-        List of land-use class names of interest (e.g., ["industrial", "commercial", ...]).
-
-    Returns
-    -------
-    DataFrame
-        Indexed by geom_id, with columns for each class:
-          - 'lu_{class}_area' (float)
-          - 'lu_{class}_share' (float)
+    Returns a DataFrame indexed by geom_id, with columns:
+      ['lu_{cls}_area', 'lu_{cls}_share', ...] for each class in lu_classes.
     """
-    # 1) Reproject to metre-based CRS for accurate area calculations
-    land_m = gdf_land.to_crs(3857)
-    mesh_m = mesh.to_crs(3857)
+    # 1) Reproject to metres
+    land_m = gdf_land.to_crs("EPSG:3857")
+    mesh_m = mesh.to_crs("EPSG:3857")
 
-    # Prepare a list to collect per-class DataFrames
-    all_class_dfs = []
+    metrics_list = []
 
     for cls in lu_classes:
-        # a) Subset land polygons of this class
+        # a) Subset polygons of class `cls`
         subset = land_m[land_m["landuse"] == cls]
         if subset.empty:
-            # If no polygons of this class exist, skip
             continue
 
-        # b) Overlay subset with the mesh to compute intersection pieces
-        overlay = gpd.overlay(subset, mesh_m[["geom_id", "geometry"]], how="intersection")
+        # b) Overlay clipped polys with mesh to get intersection
+        overlay = gpd.overlay(
+            subset,
+            mesh_m[["geom_id", "geometry"]],
+            how="intersection"
+        )
 
-        # c) Compute area of each intersected piece, in m²
+        # c) Compute area (m²) of each piece
         overlay["piece_area"] = overlay.geometry.area
 
-        # d) Sum area per mesh cell (geom_id)
+        # d) Sum up piece_area by geom_id → 'lu_{cls}_area'
         area_by_cell = overlay.groupby("geom_id")["piece_area"].sum().to_frame(f"lu_{cls}_area")
 
-        # e) Compute fraction relative to total area of this class
-        total_area = area_by_cell[f"lu_{cls}_area"].sum()
+        # e) Compute 'lu_{cls}_share'
+        total_area = float(area_by_cell[f"lu_{cls}_area"].sum())
         if total_area > 0:
             area_by_cell[f"lu_{cls}_share"] = area_by_cell[f"lu_{cls}_area"] / total_area
         else:
             area_by_cell[f"lu_{cls}_share"] = 0.0
 
-        # f) Append this DataFrame to our list
-        all_class_dfs.append(area_by_cell)
+        metrics_list.append(area_by_cell)
 
-    # 2) If no land-use classes were found, return an empty DataFrame indexed by geom_id
-    if not all_class_dfs:
+    # If nothing matched, return an empty DataFrame (so that merge still works)
+    if not metrics_list:
         return pd.DataFrame(index=mesh["geom_id"])
 
-    # 3) Concatenate all per-class results horizontally
-    result = pd.concat(all_class_dfs, axis=1).fillna(0)
-
+    # Concatenate all class‐by‐cell results horizontally
+    result = pd.concat(metrics_list, axis=1).fillna(0)
     return result
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Merge static stats onto a mesh GeoDataFrame
+# Merge all static stats onto a mesh GeoDataFrame
 # ─────────────────────────────────────────────────────────────────────────────
 def enrich_mesh(base_mesh: gpd.GeoDataFrame, stats: pd.DataFrame) -> gpd.GeoDataFrame:
     """
-    Left-join the stats DataFrame (indexed by geom_id) onto base_mesh, preserving
-    geometry. Missing values are filled with zero.
+    Left‐join `stats` (indexed by geom_id) onto `base_mesh`, preserving geometry.
+    Fill missing values with zero.
 
-    Parameters
-    ----------
-    base_mesh : GeoDataFrame
-        Mesh containing columns 'geom_id' and geometry, in EPSG:4326.
-    stats : DataFrame
-        Indexed by geom_id, containing columns like 'road_len', 'poi_count', etc.
-
-    Returns
-    -------
-    GeoDataFrame
-        The enriched mesh, with all columns in `stats` appended.
+    Returns the enriched mesh (EPSG:4326).
     """
-    # Perform a merge on the 'geom_id' column
     enriched = base_mesh.merge(
         stats.reset_index(),
         on="geom_id",
@@ -369,8 +369,9 @@ def enrich_mesh(base_mesh: gpd.GeoDataFrame, stats: pd.DataFrame) -> gpd.GeoData
 
     return enriched
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Batch process all mesh files for one city
+# Batch‐process all mesh files for one city
 # ─────────────────────────────────────────────────────────────────────────────
 def batch_write(
     city: str,
@@ -381,76 +382,75 @@ def batch_write(
     landuse_classes: List[str],
 ):
     """
-    Read one sample mesh file to get 'geom_id' schema. Load OSM layers once, compute
-    static road/poi/land-use metrics, then loop through each daily mesh file, merge
-    those static stats, and write to mesh_folder_out (overwriting existing files).
-
-    Additionally, saves a single enriched demo for date '2023-01-01' into
-    data/demo-data for quick visual QA.
+    1) Read a single 'sample' mesh (to get the 'geom_id' + 'geometry' schema).
+    2) Load OSM layers (roads, pois, landuse) exactly once.
+    3) Compute static metrics for:
+         a) roads   → summarise_roads()
+         b) pois    → summarise_pois()
+         c) landuse → summarise_landuse()
+    4) Save a one‐off “2023-01-01” demo mesh into data/demo-data/.
+    5) Loop over all daily mesh files in mesh_folder_in:
+         • Merge the static metrics into each empty mesh.
+         • Write the enriched mesh (EPSG:4326) to mesh_folder_out.
 
     Parameters
     ----------
     city : str
-        City name (e.g., "addis" or "baghdad"), used for print statements.
+        “addis” or “baghdad” (used in print statements).
     mesh_folder_in : Path
-        Directory containing empty meshes (.gpkg), one per day.
+        Directory of empty-mesh GPKGs (one per date).
     mesh_folder_out : Path
-        Directory where enriched meshes will be written.
+        Directory where enriched-mesh GPKGs will be written.
     osm_shapefile : Path
-        Path to the OSM shapefile for this country/city.
+        Either a directory (Geofabrik style) containing `*roads*.shp`, `*poi*.shp`, `*landuse*.shp`
+        or a single .shp that must be split internally.
     relevant_poi : list[str]
-        List of POI tag values to count (e.g., ["supermarket", "hospital", ...]).
+        e.g. ["supermarket", "hospital", …].
     landuse_classes : list[str]
-        List of land-use categories to summarise (e.g., ["industrial", "commercial", ...]).
+        e.g. ["industrial", "commercial", "farmland", "farmyard", "residential", "retail"].
 
     Returns
     -------
     None
     """
-    # 1) Read a sample mesh to get the base schema (geom_id + geometry)
+    # 1) Read a “sample” mesh to fix the schema (geom_id + geometry)
     sample_file = next(mesh_folder_in.glob("*.gpkg"))
     base_mesh = gpd.read_file(str(sample_file))[["geom_id", "geometry"]].copy()
+    base_mesh = base_mesh.to_crs("EPSG:4326")
 
-    # 2) Load OSM layers (roads, POIs, land-use)
+    # 2) Load OSM layers (roads, pois, landuse)
     layers = load_osm_layers(osm_shapefile)
-    roads_gdf = layers["roads"]
-    pois_gdf = layers["pois"]
-    landuse_gdf = layers["landuse"]
+    roads_gdf   = layers["roads"]   # already in EPSG:4326
+    pois_gdf    = layers["pois"]    # already in EPSG:4326
+    landuse_gdf = layers["landuse"] # already in EPSG:4326
 
     # 3) Compute static metrics once:
-    #    a) Roads metrics per mesh cell
     roads_stats = summarise_roads(roads_gdf, base_mesh)
-    #    b) POI metrics per mesh cell
-    pois_stats = summarise_pois(pois_gdf, base_mesh, relevant_poi)
-    #    c) Land-use metrics per mesh cell
-    land_stats = summarise_landuse(landuse_gdf, base_mesh, landuse_classes)
+    pois_stats  = summarise_pois(pois_gdf, base_mesh, relevant_poi)
+    land_stats  = summarise_landuse(landuse_gdf, base_mesh, landuse_classes)
 
-    # 4) Combine all metrics into one DataFrame, indexed by geom_id
+    # 4) Combine into one DataFrame (indexed by geom_id)
     stats = roads_stats.join(pois_stats, how="outer").join(land_stats, how="outer").fillna(0)
 
-    # 5) Save a single enriched demo for 2023-01-01 into data/demo-data
-    #    (Assumes mesh filenames include "2023-01-01" exactly)
+    # 5) Save a single “2023-01-01” demo mesh (if it does not already exist)
     demo_dir = mesh_folder_in.parent / "demo-data"
     demo_dir.mkdir(exist_ok=True)
-    try:
-        demo_mesh = gpd.read_file(str(demo_dir / f"{city}-2023-01-01.gpkg"))
-    except FileNotFoundError:
-        # Build the demo from the base_mesh + stats
+    demo_fp = demo_dir / f"{city}-2023-01-01.gpkg"
+    if not demo_fp.exists():
         enriched_demo = enrich_mesh(base_mesh, stats)
-        demo_fp = demo_dir / f"{city}-2023-01-01.gpkg"
         enriched_demo.to_file(str(demo_fp), driver="GPKG")
-        print(f"[{city}] Saved demo mesh: {demo_fp.name}")
+        print(f"[{city}]  ✓ Saved demo mesh: {demo_fp.name}")
 
-    # 6) Create output folder if it doesn't exist
+    # 6) Ensure the output folder exists
     mesh_folder_out.mkdir(parents=True, exist_ok=True)
 
-    # 7) Loop through every daily mesh file, merge static stats, and write out
+    # 7) Loop over every daily mesh file, enrich and write out
     for mesh_file in sorted(mesh_folder_in.glob("*.gpkg")):
-        # Read the daily empty mesh (geom_id + geometry)
         mesh_df = gpd.read_file(str(mesh_file))[["geom_id", "geometry"]].copy()
-        # Merge static stats from earlier
+        mesh_df = mesh_df.to_crs("EPSG:4326")
+
         enriched = enrich_mesh(mesh_df, stats)
-        # Write to output folder, overwriting if necessary
+
         out_fp = mesh_folder_out / mesh_file.name
         enriched.to_file(str(out_fp), driver="GPKG")
-        print(f"[{city}] Wrote enriched mesh: {out_fp.name}")
+        print(f"[{city}]  ✓ Wrote enriched mesh: {out_fp.name}")

@@ -435,39 +435,71 @@ def plot_mesh_static(
     title: str,
     out_dir: Path,
     filename: str,
-    feature: str = None,
-    figsize: tuple = (8, 6)
+    feature: Optional[str] = None,
+    figsize: Tuple[int, int] = (8, 6),
+    cmap: str = "viridis"
 ) -> None:
     """
     Plot a static mesh (GeoDataFrame) and save both:
       1) A GeoPackage for demo QA.
       2) A PNG image of the plot in out_dir.
 
-    - mesh: enriched GeoDataFrame (must already contain all attributes).
-    - title: title string for the plot.
-    - out_dir: Path where both .gpkg and .png will be saved.
-    - filename: base name (without extension), e.g. "addis-2023-01-01".
-    - feature: column name to color by; if None, plot geometry outlines only.
+    Parameters
+    ----------
+    mesh : GeoDataFrame
+        An enriched mesh (must already contain the feature‐columns).
+    title : str
+        Plot title (e.g. "Addis Ababa – OSM-Enriched Mesh (2023-01-01)").
+    out_dir : Path
+        Directory where we save both the .gpkg and the .png.
+    filename : str
+        Base filename (without extension), e.g. "addis-2023-01-01".
+    feature : str or None, default None
+        Numeric column name to color by. If None or missing, draws outlines only.
+    figsize : tuple, default (8,6)
+        Figure size in inches.
+    cmap : str, default "viridis"
+        Matplotlib colormap used when feature is present.
     """
-
     # 1) Ensure output folder exists
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 2) Save the GeoPackage
+    # 2) First, save the GeoPackage (unmodified) so you can do QA later
     gpkg_fp = out_dir / f"{filename}.gpkg"
     mesh.to_file(str(gpkg_fp), driver="GPKG")
 
     # 3) Plot
     fig, ax = plt.subplots(figsize=figsize)
-    if feature and feature in mesh.columns:
-        mesh.plot(column=feature, edgecolor="grey", legend=True, ax=ax)
+
+    if feature is not None and feature in mesh.columns and np.issubdtype(mesh[feature].dtype, np.number):
+        # Compute vmin/vmax so that the colormap is scaled to data
+        arr = mesh[feature].to_numpy(dtype=float)
+        vmin, vmax = arr.min(), arr.max()
+        if np.isclose(vmin, vmax):
+            # For nearly‐constant arrays, expand range slightly
+            epsilon = max(abs(vmin) * 0.01, 1e-6)
+            vmin -= epsilon
+            vmax += epsilon
+
+        mesh.plot(
+            column=feature,
+            cmap=cmap,
+            edgecolor="grey",
+            linewidth=0.2,
+            legend=True,
+            vmin=vmin,
+            vmax=vmax,
+            ax=ax
+        )
+
     else:
-        mesh.plot(edgecolor="grey", facecolor="none", ax=ax)
+        # If no valid feature, just draw outlines
+        mesh.plot(edgecolor="grey", facecolor="none", linewidth=0.2, ax=ax)
 
     ax.set_title(title)
     ax.set_axis_off()
 
-    # 4) Save PNG
+    # 4) Save as PNG
     png_fp = out_dir / f"{filename}.png"
     fig.savefig(str(png_fp), dpi=150, bbox_inches="tight")
     plt.close(fig)
