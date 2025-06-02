@@ -429,3 +429,47 @@ def mesh_2_gif(
 
     print(f"Animation saved to: {gif_path}")
 
+
+def plot_mesh_static(
+    mesh: gpd.GeoDataFrame,
+    title: str,
+    out_dir: Path,
+    filename: str,
+    feature: str = None,
+    figsize: tuple = (8, 6)
+) -> None:
+    """
+    Plot a static mesh (GeoDataFrame) and save both:
+      1) A GeoPackage for demo QA.
+      2) A PNG image of the plot in out_dir.
+
+    - mesh: enriched GeoDataFrame (must already contain all attributes).
+    - title: title string for the plot.
+    - out_dir: Path where both .gpkg and .png will be saved.
+    - filename: base name (without extension), e.g. "addis-2023-01-01".
+    - feature: column name to color by; if None, plot geometry outlines only.
+    """
+
+    # 1) Ensure output folder exists
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # 2) Save the GeoPackage
+    gpkg_fp = out_dir / f"{filename}.gpkg"
+    mesh.to_file(str(gpkg_fp), driver="GPKG")
+
+    # 3) Plot
+    fig, ax = plt.subplots(figsize=figsize)
+    if feature and feature in mesh.columns:
+        mesh.plot(column=feature, edgecolor="grey", legend=True, ax=ax)
+    else:
+        mesh.plot(edgecolor="grey", facecolor="none", ax=ax)
+
+    ax.set_title(title)
+    ax.set_axis_off()
+
+    # 4) Save PNG
+    png_fp = out_dir / f"{filename}.png"
+    fig.savefig(str(png_fp), dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    print(f"Saved demo plot: {png_fp.name}")
