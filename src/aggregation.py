@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import os
 from pathlib import Path
 import fiona
+import rasterio
 
 # Function: Aggregate data within each mesh
 def aggregate_to_mesh(mesh_grid, tiff_path:Path):
@@ -28,6 +29,32 @@ def aggregate_to_mesh(mesh_grid, tiff_path:Path):
     mesh_grid["no2_mean"] = [s["mean"] for s in stats]
 
     return mesh_grid
+
+# Function: Aggregate data within each hexagon
+def aggregate_mesh(hex_mesh, tiff_path):
+    """
+    Aggregated a single TIFF file under tiff_path.
+
+    Parameters:
+    -----------
+    hex_mesh: GeoDataFrame
+        The hexagonal mesh grid of the interested area.
+    tiff_path: str or Path
+        The path of the TIFF file to be processed.
+
+    Output:
+    -------
+    hex_mesh: GeoDataFrame
+        Return the aggregated data in the mesh with a new column 'pop_sum_m',
+        which contains the total population within each hexagon (set to 0 if missing or negative).
+    """
+    with rasterio.open(tiff_path) as src:
+        nodata_val = src.nodata or -99999.0
+
+    stats = zonal_stats(hex_mesh, tiff_path, stats=["sum"], nodata=nodata_val)
+    hex_mesh["pop_sum_m"] = [max(0, s["sum"] or 0) for s in stats]
+
+    return hex_mesh
 
 # Function: Aggregate and write aggregated values to multiple meshes
 def aggregate_data(
