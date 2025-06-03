@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 import rasterio
 import geopandas as gpd
+import shutil
+from datetime import datetime, timedelta
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize, LinearSegmentedColormap
@@ -437,3 +439,37 @@ def mesh_2_gif(
 
     print(f"Animation saved to: {gif_path}")
 
+
+# Function to generate daily files
+def generate_daily_files(src_file, year, num_days, name, output_path):
+    """
+    Generate daily GeoPackage files for a given year.
+
+    Parameters:
+    -----------
+    src_file: Path or str
+        The path of the source file to be copied.
+    year: int
+        The year for which daily files will be generated (used to determine start date).
+    num_days: int
+        Total number of daily files to create (e.g., 365 or 366).
+    name: str
+        The prefix name to be used in each generated file name.
+    output_path: Path
+        The directory where the daily files will be saved.
+
+    Output:
+    -------
+    GeoPackage files (one for each day) will be created in the output directory with
+    filenames formatted as `{name}-YYYY-MM-DD.gpkg`.
+    """
+    start_date = datetime(year, 1, 1)
+    output_dir = output_path / f"pop-files-{name}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for i in range(num_days):
+        date_str = (start_date + timedelta(days=i)).strftime("%Y-%m-%d")
+        filename = f"{name}-{date_str}.gpkg"
+        dst_file = output_dir / filename
+        shutil.copy(src_file, dst_file)
+
+    print(f"Done: {num_days} files created for {year}.")
