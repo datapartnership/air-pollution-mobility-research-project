@@ -40,7 +40,7 @@ def aggregate_data(
         data_tiff_path:Path, 
         mesh_path: Path,
         layer_name: str
-):
+)-> None :
     """
     Aggregate all the tiff files under the data_tiff_path to mesh. Multiple output files.
 

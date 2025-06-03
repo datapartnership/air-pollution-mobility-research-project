@@ -22,6 +22,7 @@ from pathlib import Path
 def plot_raster(
     arr: np.ndarray,
     percent_clip: float = 0.5,
+    title: str = "Raster Visualization",
     colors: Union[List[str], None] = None,
     ax: Optional[plt.Axes] = None,
     cbar: bool = True,
@@ -80,6 +81,7 @@ def plot_raster(
     imshow_kwargs = imshow_kwargs or {}
     img = ax.imshow(arr, cmap=cmap, norm=norm, **imshow_kwargs)
     ax.set_axis_off()
+    ax.set_title(title)
 
     # Add colorbar if requested
     cbar_ax = None
@@ -99,6 +101,8 @@ def plot_mesh(
     title: str = "Mesh Visualization",
     ax: Optional[plt.Axes] = None,
     axis_off: bool = True,
+    show_edges: bool = True,
+    edgecolor: str = "grey",
     figsize: Tuple[int, int] = (8, 6),
     show: bool = True,
     **plot_kwargs
@@ -121,7 +125,8 @@ def plot_mesh(
     figsize : tuple, default (8, 6)
         Size of the figure (width, height).
     show : bool, default True
-        Whether to display the figure with plt.show().
+        Whether to display the figure with plt.show(). 
+        If plotting multiple axes, set show=False to make sure everyone can be displayed.
     **plot_kwargs :
         Additional keyword arguments passed to `GeoDataFrame.plot()`.
 
@@ -133,7 +138,10 @@ def plot_mesh(
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
 
-    mesh.plot(column=feature, edgecolor="grey", legend=True, ax=ax, **plot_kwargs)
+    mesh.plot(column=feature, 
+              edgecolor=edgecolor if show_edges else None,
+              legend=True, 
+              ax=ax, **plot_kwargs)
     ax.set_title(title)
     
     if axis_off:
