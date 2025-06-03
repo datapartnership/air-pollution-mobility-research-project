@@ -231,9 +231,9 @@ def summarise_roads(gdf_roads: gpd.GeoDataFrame, mesh: gpd.GeoDataFrame) -> pd.D
 # Summarise POI metrics per mesh cell
 # ─────────────────────────────────────────────────────────────────────────────
 def summarise_pois(
+    mesh:     gpd.GeoDataFrame,
     gdf_pois: gpd.GeoDataFrame,
-    mesh: gpd.GeoDataFrame,
-    relevant_poi: List[str]
+    relevant_poi: list[str],
 ) -> pd.DataFrame:
     """
     For each mesh cell (mesh.geom_id), compute:
@@ -241,22 +241,48 @@ def summarise_pois(
       • poi_share: poi_count / total_relevant_poi_count
 
     Steps:
-      1. Build a mask for relevant POIs (amenity/shop/fclass ∈ relevant_poi).
-      2. Spatially join points → mesh (predicate="within").
+      1. Build a unified boolean mask across 'amenity', 'shop' and 'fclass' columns
+         (only considering non-null values in those columns).
+      2. Spatially join filtered POIs → mesh (predicate="within").
       3. Count by geom_id, compute poi_share.
 
     Returns a DataFrame indexed by geom_id with columns ['poi_count','poi_share'].
     """
-    # 1) Build boolean mask
-    if {"amenity", "shop"} & set(gdf_pois.columns):
-        mask = (
-            gdf_pois["amenity"].isin(relevant_poi) |
-            gdf_pois["shop"].isin(relevant_poi)
-        )
-    else:
-        mask = gdf_pois["fclass"].isin(relevant_poi)
+    # 1) Build unified boolean mask for all three tag‐columns:
+    cols_to_check = []
+    if "amenity" in gdf_pois.columns:
+        cols_to_check.append("amenity")
+    if "shop" in gdf_pois.columns:
+        cols_to_check.append("shop")
+    if "fclass" in gdf_pois.columns:
+        cols_to_check.append("fclass")
 
+    # If none of these columns exist, raise an error:
+    if not cols_to_check:
+        raise KeyError(
+            "summarise_pois: POI GeoDataFrame must contain at least one of "
+            "'amenity', 'shop', or 'fclass' columns."
+        )
+
+    # Create boolean DataFrame where each column tests membership in relevant_poi.
+    mask_df = pd.DataFrame(
+        { col: gdf_pois[col].fillna("").isin(relevant_poi) for col in cols_to_check }
+    )
+
+    # Collapse across all tag‐columns: if ANY column matches, keep that POI.
+    mask = mask_df.any(axis=1)
     filtered = gdf_pois[mask].copy()
+
+    # Early exit: if there are zero relevant POIs, return a zero‐filled DataFrame for all geom_id
+    if len(filtered) == 0:
+        empty_stats = pd.DataFrame(
+            {
+                "geom_id": mesh["geom_id"].values,
+                "poi_count": 0,
+                "poi_share": 0.0,
+            }
+        ).set_index("geom_id")
+        return empty_stats
 
     # 2) Spatial join (point‐in‐polygon) to assign each POI → geom_id
     pois4326 = filtered.to_crs("EPSG:4326")
@@ -266,20 +292,19 @@ def summarise_pois(
         pois4326,
         mesh4326,
         how="inner",
-        predicate="within"
+        predicate="within",
     )
 
-    # 3) Count by geom_id → poi_count
-    poi_counts = joined.groupby("geom_id").size().to_frame("poi_count")
+    # 3) Compute per‐cell counts; poi_share = count / total relevant POIs
+    counts = joined.groupby("geom_id").size().rename("poi_count").to_frame()
+    total_relevant = len(filtered)
+    counts["poi_share"] = counts["poi_count"] / float(total_relevant)
 
-    # 4) Compute poi_share
-    total_poi = float(poi_counts["poi_count"].sum())
-    if total_poi > 0:
-        poi_counts["poi_share"] = poi_counts["poi_count"] / total_poi
-    else:
-        poi_counts["poi_share"] = 0.0
+    # 4) Reindex so every mesh cell appears (fill missing → zero)
+    stats = counts.reindex(mesh["geom_id"], fill_value=0)
+    stats = stats.astype({"poi_count": "int64", "poi_share": "float64"})
 
-    return poi_counts.fillna(0)
+    return stats
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -426,7 +451,7 @@ def batch_write(
 
     # 3) Compute static metrics once:
     roads_stats = summarise_roads(roads_gdf, base_mesh)
-    pois_stats  = summarise_pois(pois_gdf, base_mesh, relevant_poi)
+    pois_stats  = summarise_pois(base_mesh, pois_gdf, relevant_poi)
     land_stats  = summarise_landuse(landuse_gdf, base_mesh, landuse_classes)
 
     # 4) Combine into one DataFrame (indexed by geom_id)
