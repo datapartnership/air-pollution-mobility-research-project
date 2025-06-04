@@ -104,7 +104,7 @@ def merge_multiple_gpkgs(
                 # Save the combined GeoDataFrame as a new GeoPackage
                 output_path = output_folder / file_name
                 combined_gdf.to_file(output_path, driver="GPKG")
-                print(f"{file_name} saved successfully.")
+                # print(f"{file_name} saved successfully.")
 
             except Exception as e:
                 print(f"Error merging {file_name}: {e}")
