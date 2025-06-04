@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 import rasterio
 import geopandas as gpd
+import shutil
+from datetime import datetime, timedelta
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize, LinearSegmentedColormap
@@ -20,6 +22,7 @@ from pathlib import Path
 def plot_raster(
     arr: np.ndarray,
     percent_clip: float = 0.5,
+    title: str = "Raster Visualization",
     colors: Union[List[str], None] = None,
     ax: Optional[plt.Axes] = None,
     cbar: bool = True,
@@ -78,6 +81,7 @@ def plot_raster(
     imshow_kwargs = imshow_kwargs or {}
     img = ax.imshow(arr, cmap=cmap, norm=norm, **imshow_kwargs)
     ax.set_axis_off()
+    ax.set_title(title)
 
     # Add colorbar if requested
     cbar_ax = None
@@ -97,6 +101,8 @@ def plot_mesh(
     title: str = "Mesh Visualization",
     ax: Optional[plt.Axes] = None,
     axis_off: bool = True,
+    show_edges: bool = True,
+    edgecolor: str = "grey",
     figsize: Tuple[int, int] = (8, 6),
     show: bool = True,
     **plot_kwargs
@@ -119,7 +125,8 @@ def plot_mesh(
     figsize : tuple, default (8, 6)
         Size of the figure (width, height).
     show : bool, default True
-        Whether to display the figure with plt.show().
+        Whether to display the figure with plt.show(). 
+        If plotting multiple axes, set show=False to make sure everyone can be displayed.
     **plot_kwargs :
         Additional keyword arguments passed to `GeoDataFrame.plot()`.
 
@@ -131,7 +138,10 @@ def plot_mesh(
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
 
-    mesh.plot(column=feature, edgecolor="grey", legend=True, ax=ax, **plot_kwargs)
+    mesh.plot(column=feature, 
+              edgecolor=edgecolor if show_edges else None,
+              legend=True, 
+              ax=ax, **plot_kwargs)
     ax.set_title(title)
     
     if axis_off:
@@ -429,3 +439,37 @@ def mesh_2_gif(
 
     print(f"Animation saved to: {gif_path}")
 
+
+# Function to generate daily files
+def generate_daily_files(src_file, year, num_days, name, output_path):
+    """
+    Generate daily GeoPackage files for a given year.
+
+    Parameters:
+    -----------
+    src_file: Path or str
+        The path of the source file to be copied.
+    year: int
+        The year for which daily files will be generated (used to determine start date).
+    num_days: int
+        Total number of daily files to create (e.g., 365 or 366).
+    name: str
+        The prefix name to be used in each generated file name.
+    output_path: Path
+        The directory where the daily files will be saved.
+
+    Output:
+    -------
+    GeoPackage files (one for each day) will be created in the output directory with
+    filenames formatted as `{name}-YYYY-MM-DD.gpkg`.
+    """
+    start_date = datetime(year, 1, 1)
+    output_dir = output_path / f"pop-files-{name}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for i in range(num_days):
+        date_str = (start_date + timedelta(days=i)).strftime("%Y-%m-%d")
+        filename = f"{name}-{date_str}.gpkg"
+        dst_file = output_dir / filename
+        shutil.copy(src_file, dst_file)
+
+    print(f"Done: {num_days} files created for {year}.")
