@@ -90,6 +90,7 @@ _build/
 
 # python-dotenv
 .env
+.conda
 
 # setuptools-scm/
 src/*/_version.py
