@@ -37,3 +37,5 @@ The points of interest data was processed to obtain the total percentage of POI 
 The total road length per cell was calculated in metres per cell as shown in Figure 8. Comparing this with figures 2, 3, and 4, we observe a correlation between the persistence of roads, LRT, and population distribution.
 
 ![](/docs/images/EDA/fig6.png)
+
+## Baghdad
