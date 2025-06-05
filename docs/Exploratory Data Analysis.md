@@ -15,6 +15,7 @@ On closer inspection, we also notice lower NO<sub>2</sub> levels on weekends as 
 2. Population:
 
 ![](/docs/images/EDA/fig3.png)
+
 The population distribution for 2023 and 2024 also shows a similar trend to NO<sub>2</sub>, i.e., a possibly high correlation to the transport network and industrial production regions. Particularly, two offshoots are observed spreading from the northwest horizontally to the east and diagonally to the south. For the first case, the presence of the East-West line of the LRT corridor and A1 highway may be a possible reason. For the second case, higher population is observed along the North-South line of the LRT followed by the A1 highway corridor. 
 
 Similar to NO<sub>2</sub>, lower population numbers are observed in croplands and forested regions. The total population in this region increased by 2.17% to about 4,281,917.
@@ -22,14 +23,17 @@ Similar to NO<sub>2</sub>, lower population numbers are observed in croplands an
 3. Industrial Area:
 
 The industrial land use area distribution as shown in Figure 5 also shows higher values along the A1 highway corridor. Furthermore, higher industrial area towards the east can be attributed to the Special Economic Zone (SEZ) of Bole Lemi as shown in Figure 6.
+
 ![](/docs/images/EDA/fig4.png)
 
 4. Points of Interest:
 
 The points of interest data was processed to obtain the total percentage of POI expected to produce considerable amounts of NO<sub>2</sub> due to industrial activity and/or mobility. These POI included supermarkets, hospitals, car dealerships, car rentals, carwash, marketplaces, malls, and universities. Comparing Figure 3 and Figure 7, a higher concentration of POI is observed in the heart of Addis Ababa.
+
 ![](/docs/images/EDA/fig5.png)
 
 5. Road Length:
 
 The total road length per cell was calculated in metres per cell as shown in Figure 8. Comparing this with figures 2, 3, and 4, we observe a correlation between the persistence of roads, LRT, and population distribution.
+
 ![](/docs/images/EDA/fig6.png)
