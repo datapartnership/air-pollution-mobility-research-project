@@ -95,5 +95,9 @@ _build/
 # setuptools-scm/
 src/*/_version.py
 
-# raw data
-data/
+# ignore raw data
+data/*
+
+# demo-data as an exception
+!data/demo-data/
+!data/demo-data/**
