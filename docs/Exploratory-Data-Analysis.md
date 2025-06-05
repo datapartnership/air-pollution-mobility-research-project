@@ -77,5 +77,3 @@ The total road length per cell in the grid shows a stark resemblance to the popu
 ## Appendix
 
 ![](/docs/images/EDA/fig12.png)
-
-![](/docs/images/EDA/fig13.png)
