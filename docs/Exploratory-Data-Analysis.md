@@ -77,3 +77,27 @@ The total road length per cell in the grid shows a stark resemblance to the popu
 ## Appendix
 
 ![](/docs/images/EDA/fig12.png)
+
+![](/docs/images/EDA/fig13.png)
+
+![](/docs/images/EDA/fig14.png)
+
+![](/docs/images/EDA/fig15.png)
+
+![](/docs/images/EDA/fig16.png)
+
+![](/docs/images/EDA/fig17.png)
+
+![](/docs/images/EDA/fig18.png)
+
+![](/docs/images/EDA/fig19.png)
+
+![](/docs/images/EDA/fig20.png)
+
+![](/docs/images/EDA/fig21.png)
+
+## References
+
+Teklemariam, E.A. and Shen, Z. (2020). Determining transit nodes for potential transit-oriented development: Along the LRT corridor in Addis Ababa, Ethiopia. Frontiers of Architectural Research. doi:https://doi.org/10.1016/j.foar.2020.03.005.
+
+Hassoon, A.F. and Roomi, T.O. (2023). EFFECT OF THE CONVECTIVE BOUNDARY LAYER ON RADIOSONDE FLIGHT PATH OVER BAGHDAD AIRPORT STATION (CASE STUDY). The Iraqi Journal of Agricultural Sciences, [online] 54(6), pp.1603–1621. doi:https://doi.org/10.36103/ijas.v54i6.1861.
