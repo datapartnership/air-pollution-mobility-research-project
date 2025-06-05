@@ -16,7 +16,9 @@ import pandas as pd
 from pandas import DataFrame
 
 # Function: Aggregate data within each mesh
-def aggregate_to_mesh(mesh_grid, tiff_path:Path):
+def aggregate_to_mesh(mesh_grid, 
+                      tiff_path:Path,
+                      feature_name: str)-> gpd.GeoDataFrame:
     """
     Aggregated a single tiff file under tiff_path
 
@@ -34,7 +36,7 @@ def aggregate_to_mesh(mesh_grid, tiff_path:Path):
     """
 
     stats = zonal_stats(mesh_grid, tiff_path, stats=["mean"], nodata=np.nan)
-    mesh_grid["no2_mean"] = [s["mean"] for s in stats]
+    mesh_grid[feature_name] = [s["mean"] for s in stats]
 
     return mesh_grid
 
@@ -42,8 +44,8 @@ def aggregate_to_mesh(mesh_grid, tiff_path:Path):
 def aggregate_data(
         data_tiff_path:Path, 
         mesh_path: Path,
-        layer_name: str
-)-> None :
+        feature_name: str,
+        layer_name: str)-> None :
     """
     Aggregate all the tiff files under the data_tiff_path to mesh. Multiple output files.
 
@@ -73,7 +75,7 @@ def aggregate_data(
         mesh = gpd.read_file(matched_mesh)
 
         try:
-            new_mesh = aggregate_to_mesh(mesh, tiff_path)
+            new_mesh = aggregate_to_mesh(mesh, tiff_path, feature_name)
             new_mesh.to_file(matched_mesh, driver='GPKG', layer=layer_name, mode='w')
 
 
