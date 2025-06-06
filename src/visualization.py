@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 import rasterio
 import geopandas as gpd
+import shutil
+from datetime import datetime, timedelta
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize, LinearSegmentedColormap
@@ -20,6 +22,7 @@ from pathlib import Path
 def plot_raster(
     arr: np.ndarray,
     percent_clip: float = 0.5,
+    title: str = "Raster Visualization",
     colors: Union[List[str], None] = None,
     ax: Optional[plt.Axes] = None,
     cbar: bool = True,
@@ -78,6 +81,7 @@ def plot_raster(
     imshow_kwargs = imshow_kwargs or {}
     img = ax.imshow(arr, cmap=cmap, norm=norm, **imshow_kwargs)
     ax.set_axis_off()
+    ax.set_title(title)
 
     # Add colorbar if requested
     cbar_ax = None
@@ -97,6 +101,8 @@ def plot_mesh(
     title: str = "Mesh Visualization",
     ax: Optional[plt.Axes] = None,
     axis_off: bool = True,
+    show_edges: bool = True,
+    edgecolor: str = "grey",
     figsize: Tuple[int, int] = (8, 6),
     show: bool = True,
     **plot_kwargs
@@ -119,7 +125,8 @@ def plot_mesh(
     figsize : tuple, default (8, 6)
         Size of the figure (width, height).
     show : bool, default True
-        Whether to display the figure with plt.show().
+        Whether to display the figure with plt.show(). 
+        If plotting multiple axes, set show=False to make sure everyone can be displayed.
     **plot_kwargs :
         Additional keyword arguments passed to `GeoDataFrame.plot()`.
 
@@ -131,7 +138,10 @@ def plot_mesh(
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
 
-    mesh.plot(column=feature, edgecolor="grey", legend=True, ax=ax, **plot_kwargs)
+    mesh.plot(column=feature, 
+              edgecolor=edgecolor if show_edges else None,
+              legend=True, 
+              ax=ax, **plot_kwargs)
     ax.set_title(title)
     
     if axis_off:
@@ -428,4 +438,112 @@ def mesh_2_gif(
     plt.show()
 
     print(f"Animation saved to: {gif_path}")
+
+
+# Function to generate daily files
+def generate_daily_files(src_file, year, num_days, name, output_path):
+    """
+    Generate daily GeoPackage files for a given year.
+
+    Parameters:
+    -----------
+    src_file: Path or str
+        The path of the source file to be copied.
+    year: int
+        The year for which daily files will be generated (used to determine start date).
+    num_days: int
+        Total number of daily files to create (e.g., 365 or 366).
+    name: str
+        The prefix name to be used in each generated file name.
+    output_path: Path
+        The directory where the daily files will be saved.
+
+    Output:
+    -------
+    GeoPackage files (one for each day) will be created in the output directory with
+    filenames formatted as `{name}-YYYY-MM-DD.gpkg`.
+    """
+    start_date = datetime(year, 1, 1)
+    output_dir = output_path / f"pop-files-{name}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for i in range(num_days):
+        date_str = (start_date + timedelta(days=i)).strftime("%Y-%m-%d")
+        filename = f"{name}-{date_str}.gpkg"
+        dst_file = output_dir / filename
+        shutil.copy(src_file, dst_file)
+
+    print(f"Done: {num_days} files created for {year}.")
+
+
+import geopandas as gpd
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+
+def plot_feature_correlation_heatmap(
+        data_folder: Path,
+        output_path: Path, 
+        plot_name: str,
+):
+    """
+    Generate and save a Pearson correlation heatmap from multiple GPKG files.
+
+    This function reads all GPKG files in the specified folder, merges them into a 
+    single GeoDataFrame, extracts numeric features, drops rows with missing values,
+    computes the Pearson correlation matrix, and saves the resulting heatmap as an image.
+
+    Parameters
+    ----------
+    data_folder : Path
+        Path to the folder containing .gpkg files.
+    output_path : Path
+        Directory where the heatmap image will be saved.
+    plot_name : str
+        Name of the output heatmap image file (without extension or path).
+
+    Example
+    -------
+    >>> from pathlib import Path
+    >>> data_folder = Path("/path/to/addis-mesh-data")
+    >>> output_path = Path("./outputs")
+    >>> plot_feature_correlation_heatmap(data_folder, output_path, "correlation_heatmap")
+    """
+    
+    # Concatenate into a single GeoDataFrame
+    gpkg_files = sorted(data_folder.glob('*.gpkg'))
+
+    gdfs = []
+    for file in tqdm(gpkg_files, desc="Reading GPKG files"):
+        try:
+            gdf = gpd.read_file(file)
+            gdfs.append(gdf)
+        except Exception as e:
+            print(f"Failed to read {file}, error: {e}")
+
+    merged_gdf = pd.concat(gdfs, ignore_index=True)
+    numeric_df = merged_gdf.select_dtypes(include='number')
+
+    # Drop rows with any missing values and report how many were removed
+    total_rows = numeric_df.shape[0]
+    rows_with_na = numeric_df.isna().any(axis=1).sum()
+    percent_dropped = (rows_with_na / total_rows) * 100
+    print(f"Dropped {rows_with_na} rows ({percent_dropped:.2f}%) due to missing values")
+
+    numeric_df = numeric_df.dropna(axis=0, how='any')
+    
+    # Alternative: fill missing values with column means
+    # numeric_df = numeric_df.fillna(numeric_df.mean())
+
+    # Compute Pearson correlation matrix
+    corr_matrix = numeric_df.corr(method='pearson')
+
+    # Visualize as heatmap
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap="coolwarm", square=True)
+    plt.title(plot_name)
+    plt.tight_layout()
+    plt.savefig(output_path / f'{plot_name}.png', dpi=300)
+    plt.show()
+    print(f"Heatmap saved to {output_path}")
 
