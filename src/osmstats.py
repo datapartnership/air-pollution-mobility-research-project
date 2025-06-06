@@ -405,59 +405,48 @@ def batch_write(
     osm_shapefile: Path,
     relevant_poi: List[str],
     landuse_classes: List[str],
+    # ────────────────────────────────────────────────────
+    fossil_pp_path: Path                    # ← new parameter for GPKG path
 ):
     """
-    1) Read a single 'sample' mesh (to get the 'geom_id' + 'geometry' schema).
-    2) Load OSM layers (roads, pois, landuse) exactly once.
-    3) Compute static metrics for:
-         a) roads   → summarise_roads()
-         b) pois    → summarise_pois()
-         c) landuse → summarise_landuse()
-    4) Save a one‐off “2023-01-01” demo mesh into data/demo-data/.
-    5) Loop over all daily mesh files in mesh_folder_in:
-         • Merge the static metrics into each empty mesh.
-         • Write the enriched mesh (EPSG:4326) to mesh_folder_out.
-
-    Parameters
-    ----------
-    city : str
-        “addis” or “baghdad” (used in print statements).
-    mesh_folder_in : Path
-        Directory of empty-mesh GPKGs (one per date).
-    mesh_folder_out : Path
-        Directory where enriched-mesh GPKGs will be written.
-    osm_shapefile : Path
-        Either a directory (Geofabrik style) containing `*roads*.shp`, `*poi*.shp`, `*landuse*.shp`
-        or a single .shp that must be split internally.
-    relevant_poi : list[str]
-        e.g. ["supermarket", "hospital", …].
-    landuse_classes : list[str]
-        e.g. ["industrial", "commercial", "farmland", "farmyard", "residential", "retail"].
-
-    Returns
-    -------
-    None
+    (existing docstring…)
     """
-    # 1) Read a “sample” mesh to fix the schema (geom_id + geometry)
+    # 1) Read a “sample” mesh to fix the schema
     sample_file = next(mesh_folder_in.glob("*.gpkg"))
     base_mesh = gpd.read_file(str(sample_file))[["geom_id", "geometry"]].copy()
     base_mesh = base_mesh.to_crs("EPSG:4326")
 
     # 2) Load OSM layers (roads, pois, landuse)
     layers = load_osm_layers(osm_shapefile)
-    roads_gdf   = layers["roads"]   # already in EPSG:4326
-    pois_gdf    = layers["pois"]    # already in EPSG:4326
-    landuse_gdf = layers["landuse"] # already in EPSG:4326
+    roads_gdf   = layers["roads"]   # in EPSG:4326
+    pois_gdf    = layers["pois"]    # in EPSG:4326
+    landuse_gdf = layers["landuse"] # in EPSG:4326
 
     # 3) Compute static metrics once:
-    roads_stats = summarise_roads(roads_gdf, base_mesh)
-    pois_stats  = summarise_pois(base_mesh, pois_gdf, relevant_poi)
-    land_stats  = summarise_landuse(landuse_gdf, base_mesh, landuse_classes)
+    roads_stats_all = summarise_roads(roads_gdf, base_mesh)
+    pois_stats      = summarise_pois(base_mesh, pois_gdf, relevant_poi)
+    land_stats      = summarise_landuse(landuse_gdf, base_mesh, landuse_classes)
 
-    # 4) Combine into one DataFrame (indexed by geom_id)
-    stats = roads_stats.join(pois_stats, how="outer").join(land_stats, how="outer").fillna(0)
+    # ── NEW: per-class road metrics ─────────────────────────
+    classes = ["motorway", "trunk", "primary", "secondary", "tertiary", "residential"]
+    roads_by_class = summarise_roads_by_class(roads_gdf, base_mesh, classes=classes)
 
-    # 5) Save a single “2023-01-01” demo mesh (if it does not already exist)
+    # ── NEW: fossil power-plant counts ───────────────────────
+    # Load the GPKG once (expects a single layer of point geometries)
+    plants_gdf = gpd.read_file(str(fossil_pp_path))
+    pp_stats = summarise_fossil_powerplants(base_mesh, plants_gdf)
+
+    # 4) Merge everything into one DataFrame (indexed by geom_id)
+    stats = (
+        roads_stats_all
+        .join(pois_stats, how="outer")
+        .join(land_stats, how="outer")
+        .join(roads_by_class, how="outer")
+        .join(pp_stats, how="outer")
+        .fillna(0)
+    )
+
+    # 5) Save “2023-01-01” demo mesh (existing logic)
     demo_dir = mesh_folder_in.parent / "demo-data"
     demo_dir.mkdir(exist_ok=True)
     demo_fp = demo_dir / f"{city}-2023-01-01.gpkg"
@@ -466,10 +455,10 @@ def batch_write(
         enriched_demo.to_file(str(demo_fp), driver="GPKG")
         print(f"[{city}]  ✓ Saved demo mesh: {demo_fp.name}")
 
-    # 6) Ensure the output folder exists
+    # 6) Ensure output folder exists
     mesh_folder_out.mkdir(parents=True, exist_ok=True)
 
-    # 7) Loop over every daily mesh file, enrich and write out
+    # 7) Loop over daily mesh files, enrich and write out:
     for mesh_file in sorted(mesh_folder_in.glob("*.gpkg")):
         mesh_df = gpd.read_file(str(mesh_file))[["geom_id", "geometry"]].copy()
         mesh_df = mesh_df.to_crs("EPSG:4326")
@@ -479,3 +468,111 @@ def batch_write(
         out_fp = mesh_folder_out / mesh_file.name
         enriched.to_file(str(out_fp), driver="GPKG")
         print(f"[{city}]  ✓ Wrote enriched mesh: {out_fp.name}")
+
+
+def summarise_roads_by_class(
+    gdf_roads: gpd.GeoDataFrame,
+    mesh: gpd.GeoDataFrame,
+    classes: list[str] = ["motorway", "trunk", "primary", "secondary", "tertiary", "residential"],
+    class_col: str = "fclass",
+    mesh_id_col: str = "geom_id",
+) -> pd.DataFrame:
+    """
+    For each mesh cell, compute the total length (in metres) of each road class.
+    Outputs a DataFrame indexed by mesh_id_col, with columns:
+      'road_motorway_len', 'road_trunk_len', ..., 'road_residential_len'.
+
+    Parameters
+    ----------
+    gdf_roads : GeoDataFrame
+        All road segments (in EPSG:4326) with a column `class_col` telling road type.
+    mesh : GeoDataFrame
+        Grid cells (in EPSG:4326) having a unique ID in `mesh_id_col`.
+    classes : list[str]
+        List of OSM classes to measure.
+    class_col : str
+        Column in gdf_roads that holds the road classification (e.g. 'fclass').
+    mesh_id_col : str
+        Unique ID column in mesh (e.g. 'geom_id') to group by.
+
+    Returns
+    -------
+    DataFrame indexed by mesh_id_col, with one column per class, named 'road_<class>_len'.
+    """
+    # Reproject both to EPSG:3857 to measure lengths in metres
+    roads_m = gdf_roads.to_crs("EPSG:3857")
+    mesh_m = mesh.to_crs("EPSG:3857")[ [mesh_id_col, "geometry"] ].copy()
+
+    # Prepare empty dict to collect per‐class results
+    per_class_stats = {}
+
+    for cls in classes:
+        # Subset only that class
+        subset = roads_m[roads_m[class_col] == cls]
+        if subset.empty:
+            # If no such roads, put zeros for all mesh cells
+            zeros = pd.Series(0.0, index=mesh[mesh_id_col].values, name=f"road_{cls}_len")
+            per_class_stats[cls] = zeros.to_frame()
+            continue
+
+        # Overlay subset with mesh to get clipped segments inside each cell
+        overlay = gpd.overlay(
+            subset,
+            mesh_m,
+            how="intersection"
+        )
+        # Compute each segment’s length in metres
+        overlay["seg_len"] = overlay.geometry.length
+
+        # Sum seg_len by mesh_id_col
+        summed = overlay.groupby(mesh_id_col)["seg_len"].sum().rename(f"road_{cls}_len")
+        # Reindex so every mesh cell appears
+        summed = summed.reindex(mesh[mesh_id_col].values, fill_value=0.0)
+        per_class_stats[cls] = summed.to_frame()
+
+    # Concatenate horizontally all per‐class DataFrames
+    result = pd.concat(per_class_stats.values(), axis=1)
+    return result
+
+def summarise_fossil_powerplants(
+    mesh: gpd.GeoDataFrame,
+    gdf_plants: gpd.GeoDataFrame,
+    mesh_id_col: str = "geom_id",
+    output_col: str = "fossil_pp_count"
+) -> pd.DataFrame:
+    """
+    For each mesh cell (mesh_id_col), count how many fossil-fuel power‐plant points lie within it.
+    Returns a DataFrame indexed by mesh_id_col with column `output_col`.
+
+    Parameters
+    ----------
+    mesh : GeoDataFrame
+        Grid cells in EPSG:4326 with a unique ID in `mesh_id_col`.
+    gdf_plants : GeoDataFrame
+        Point geometries of fossil-fuel power plants (EPSG:4326).
+    mesh_id_col : str
+        Column in mesh used to join.
+    output_col : str
+        Name of the output count column.
+
+    Returns
+    -------
+    DataFrame indexed by mesh_id_col, with one column named output_col.
+    """
+    # Ensure both are in same CRS (EPSG:4326)
+    mesh4326 = mesh[[mesh_id_col, "geometry"]].to_crs("EPSG:4326")
+    plants4326 = gdf_plants.to_crs("EPSG:4326")
+
+    # Spatial join: assign each plant → mesh cell
+    joined = gpd.sjoin(
+        plants4326,
+        mesh4326,
+        how="inner",
+        predicate="within",
+    )
+
+    # Count per mesh cell
+    counts = joined.groupby(mesh_id_col).size().rename(output_col).to_frame()
+    # Reindex so every mesh cell appears
+    counts = counts.reindex(mesh[mesh_id_col].values, fill_value=0)
+    return counts
