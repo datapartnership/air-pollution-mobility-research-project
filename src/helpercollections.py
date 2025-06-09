@@ -168,3 +168,24 @@ def clip_tiff_by_bbox(city, data_tiff_path, output_path,
 
     print(f"All clipped TIFF files saved to {output_dir}")
     return output_dir
+
+from pathlib import Path
+from tqdm import tqdm
+from typing import List
+
+def load_gpkgs(data_folder: Path) -> List[gpd.GeoDataFrame]:
+    """"
+    Read all the gpkg into one list, each element being one mesh, GeoDataFrame.
+
+    Usage:
+    >>> load_gpkgs(DATA_PATH / "addis-mesh-data")
+    """
+    gpkg_files = sorted(data_folder.glob('*.gpkg'))
+    gdfs = []
+    for file in tqdm(gpkg_files, desc="Reading GPKG files"):
+        try:
+            gdf = gpd.read_file(file)
+            gdfs.append(gdf)
+        except Exception as e:
+            print(f"Failed to read {file}, error: {e}")
+    return gdfs
