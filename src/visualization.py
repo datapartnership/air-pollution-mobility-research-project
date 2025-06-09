@@ -178,7 +178,7 @@ def plot_mesh(
     feature: str,
     title: str = "Mesh Visualization",
     ax: Optional[plt.Axes] = None,
-    axis_off: bool = True,
+    axis_off: bool = True,  
     show_edges: bool = True,
     edgecolor: str = "grey",
     figsize: Tuple[int, int] = (8, 6),
@@ -217,6 +217,7 @@ def plot_mesh(
         fig, ax = plt.subplots(figsize=figsize)
 
     mesh.plot(column=feature, 
+              cmap="viridis",
               edgecolor=edgecolor if show_edges else None,
               legend=True, 
               ax=ax, **plot_kwargs)
@@ -625,3 +626,86 @@ def plot_feature_correlation_heatmap(
     plt.show()
     print(f"Heatmap saved to {output_path}")
 
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+def plot_mean_pacf(
+        pacf_all: np.ndarray, 
+        output_path: Path,
+        pacf_title: str = "Average PACF of NO$_2$ by Cell in Addis Ababa", 
+        ylabel_name: str = "NO2 Concentration",
+):
+    """
+    Plot the mean Partial Autocorrelation Function (PACF) across all mesh cells,
+    including a ±1 standard deviation confidence band.
+
+    Parameters
+    ----------
+    pacf_all : np.ndarray
+        A 2D array of shape (n_cells, n_lags + 1), where each row contains the PACF values
+        for a mesh cell at different time lags.
+    output_path : Path
+        Directory where the heatmap image will be saved.
+    pacf_title : str, optional
+        Title of the plot. Default is "Average PACF of NO$_2$ by Cell in Addis Ababa".
+    ylabel_name : str, optional
+        Name of the column/field analysed, used for labeling the axes. Default is "NO2 Concentration".
+    
+    Returns
+    -------
+    None
+
+    Example
+    -------
+    >>> pacf_all = np.array([[1.0, 0.3, 0.1], [1.0, 0.25, 0.05]])
+    >>> plot_mean_pacf(pacf_all, output_path = 'file/output', pacf_title="PACF Example", ylabel_name="NO2 Concentration")
+    """
+    
+    # Compute the mean and standard deviation of PACF across all cells for each lag
+    mean_pacf = np.mean(pacf_all, axis=0)
+    pacf_std = np.std(pacf_all, axis=0)
+    lags = np.arange(len(mean_pacf))
+
+    # Use seaborn style for better aesthetics
+    plt.style.use("seaborn-v0_8-darkgrid")
+    # plt.style.use("default")
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    # Plot stem plot for mean PACF
+    markerline, stemlines, baseline = ax.stem(lags, mean_pacf, basefmt=" ")
+    plt.setp(markerline, marker='o', markersize=6, color='tab:blue', label="Mean PACF")
+    plt.setp(stemlines, linestyle='-', linewidth=1.5, color='tab:blue')
+
+    # Add ±1 standard deviation confidence band
+    ax.fill_between(
+        lags,
+        mean_pacf - pacf_std,
+        mean_pacf + pacf_std,
+        color='tab:blue',
+        alpha=0.2,
+        label='±1 Std Dev'
+    )
+
+    # Axis labels and title
+    ax.set_xlabel("Lag", fontsize=12)
+    ax.set_ylabel(f"Mean PACF ({ylabel_name})", fontsize=12)
+    ax.set_title(pacf_title, fontsize=14, weight='bold')
+    ax.axhline(0, color='black', linestyle='--', linewidth=1)
+
+    # Add legend and adjust layout
+    ax.legend()
+    fig.tight_layout()
+    plt.savefig(output_path / f'{pacf_title}.png', dpi=300)
+    plt.show()
+    print(f"Figure saved to {output_path}")
+
+
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
+def show_image(file_path):
+    img = mpimg.imread(file_path)
+    plt.figure(figsize=(10, 6)) 
+    plt.imshow(img)
+    plt.axis('off') 
+    plt.show()
