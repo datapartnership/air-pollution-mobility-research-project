@@ -95,6 +95,84 @@ def plot_raster(
     return ax, cbar_ax
 
 
+
+def plot_raster_ntl(
+    arr: np.ndarray,
+    percent_clip: float = 0.5,
+    title: str = "Raster Visualization",
+    colors: Union[List[str], None] = None,
+    ax: Optional[plt.Axes] = None,
+    cbar: bool = True,
+    cbar_label: str = "Night Time Light (percent-clipped)",
+    imshow_kwargs: Optional[dict] = None,
+    cbar_kwargs: Optional[dict] = None,
+) -> Tuple[plt.Axes, Optional[plt.Axes]]:
+    """
+    Display a 2D raster image with percent-based value clipping and custom colormap.
+
+    Parameters
+    ----------
+    arr : np.ndarray
+        2D raster array with missing values marked as np.nan.
+    percent_clip : float, default 0.5
+        Percentage of the lower and upper tails to clip when computing color bounds.
+    colors : list[str] | None, optional
+        List of color names to define a custom colormap.
+    ax : matplotlib.axes.Axes | None, optional
+        Existing matplotlib axes to draw on. If None, a new figure and axes are created.
+    cbar : bool, default True
+        Whether to include a colorbar in the plot.
+    cbar_label : str, default "NO₂ (percent-clipped)"
+        Label for the colorbar.
+    imshow_kwargs : dict | None, optional
+        Additional keyword arguments to pass to `imshow()`.
+    cbar_kwargs : dict | None, optional
+        Additional keyword arguments to pass to `colorbar()`.
+
+    Returns
+    -------
+    ax : plt.Axes
+        The axes containing the image.
+    cbar_ax : plt.Axes or None
+        The colorbar axes if `cbar` is True; otherwise None.
+    """
+    if colors is None:
+        colors = ["blue", "cyan", "yellow", "red"]
+
+    # Flatten and clean the array to compute percentiles
+    flat = arr[~np.isnan(arr)].ravel()
+    vmin = np.percentile(flat, percent_clip)
+    vmax = np.percentile(flat, 100 - percent_clip)
+
+    # Normalize and create colormap
+    norm = Normalize(vmin=vmin, vmax=vmax, clip=True)
+    cmap = LinearSegmentedColormap.from_list("custom_map", colors)
+
+    # Create new figure and axes if none provided
+    created_new_ax = False
+    if ax is None:
+        _, ax = plt.subplots(figsize=(6, 6))
+        created_new_ax = True
+
+    # Apply imshow with extra kwargs
+    imshow_kwargs = imshow_kwargs or {}
+    img = ax.imshow(arr, cmap=cmap, norm=norm, **imshow_kwargs)
+    ax.set_axis_off()
+    ax.set_title(title)
+
+    # Add colorbar if requested
+    cbar_ax = None
+    if cbar:
+        cbar_kwargs = cbar_kwargs or {}
+        cbar_ax = plt.colorbar(img, ax=ax, label=cbar_label, **cbar_kwargs)
+
+    if created_new_ax:
+        plt.show()
+
+    return ax, cbar_ax
+
+
+
 def plot_mesh(
     mesh: gpd.GeoDataFrame,
     feature: str,
