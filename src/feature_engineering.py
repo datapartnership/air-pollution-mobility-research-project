@@ -1,26 +1,38 @@
-# ─── in src/feature_engineering.py ────────────────────────────────────────
-
-import re
-from pathlib import Path
-import geopandas as gpd
-import pandas as pd
-import numpy as np
-from sklearn.neighbors import NearestNeighbors
-
-DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
-
-def load_mesh_series(folder: Path, id_col="geom_id", target="no2_mean"):
+def load_mesh_series(folder: Path,
+                     id_col: str = "geom_id",
+                     target: str = "no2_mean",
+                     features: list[str] | None = None) -> pd.DataFrame:
+    """
+    Load all .gpkg files in `folder`, extract date from filename,
+    keep id_col, target, geometry + any `features` you pass,
+    then drop all *_share columns and `fid`.
+    """
     records = []
     for fp in sorted(folder.glob("*.gpkg")):
         m = DATE_RE.search(fp.stem)
         if not m:
             raise ValueError(f"No YYYY-MM-DD in filename {fp.name}")
-        date_str = m.group(0)
-        gdf = gpd.read_file(fp)[[id_col, target, "geometry"]].copy()
-        gdf["date"] = pd.to_datetime(date_str)
+        date = pd.to_datetime(m.group(0))
+        gdf = gpd.read_file(fp)
+
+        # select only id, target, geometry, date, plus any extra features
+        keep = {id_col, target, "geometry"}
+        if features:
+            keep |= set(features)
+        # ensure date is added
+        gdf = gdf.loc[:, [c for c in gdf.columns if c in keep]].copy()
+        gdf["date"] = date
         records.append(gdf)
-    cleaned = [df.dropna(axis=1, how="all") for df in records]
-    return pd.concat(cleaned, ignore_index=True)
+
+    df = pd.concat(records, ignore_index=True)
+
+    # drop any *_share fields and fid
+    drop_cols = [c for c in df.columns if c.endswith("_share") or c == "fid"]
+    df = df.drop(columns=drop_cols, errors="ignore")
+
+    # drop columns that were all‐NA (e.g. if feature missing)
+    df = df.dropna(axis=1, how="all")
+    return df
 
 def make_lag_features(df, id_col="geom_id", target="no2_mean", nlags=7):
     df = df.sort_values([id_col, "date"])
@@ -30,39 +42,52 @@ def make_lag_features(df, id_col="geom_id", target="no2_mean", nlags=7):
 
 class NeighborAggregator:
     """
-    Computes k-nearest neighbors in EPSG:3857 and for each row
-    averages its lag-features among its neighbors on the same date.
+    Vectorised neighbour-lag aggregator: for each (geom_id,date) row
+    computes the mean of all its lag-features among its k nearest
+    neighbours _on that same date_ in one bulk merge (no python loop).
     """
     def __init__(self, k=8, id_col="geom_id"):
         self.k = k
         self.id_col = id_col
 
     def fit(self, static_gdf: gpd.GeoDataFrame, y=None):
-        # Project to metric CRS for accurate distances
+        # project for metric distances
         m = static_gdf.to_crs("EPSG:3857")
-        coords = list(m.geometry.centroid.apply(lambda p: (p.x, p.y)))
+        pts = np.vstack(m.geometry.centroid.apply(lambda p: (p.x, p.y)).values)
         self.ids_ = m[self.id_col].values
-        # Build an id → position lookup
-        self.id_to_pos = {cid: i for i, cid in enumerate(self.ids_)}
-        # Fit neighbors
-        self.nn = NearestNeighbors(n_neighbors=self.k + 1)
-        self.nn.fit(coords)
-        self.neigh_idx = self.nn.kneighbors(coords, return_distance=False)[:, 1:]
+        self.nn = NearestNeighbors(n_neighbors=self.k+1).fit(pts)
+        # each row’s neighbors (skip self at index 0)
+        self.neigh_idx = self.nn.kneighbors(pts, return_distance=False)[:, 1:]
         return self
 
-    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
-        lag_cols = [c for c in df.columns if c.startswith("no2_mean_lag")]
-        out = np.full((len(df), len(lag_cols)), np.nan)
+    def transform(self, df: pd.DataFrame, target="no2_mean") -> pd.DataFrame:
+        # identify lag cols
+        lag_cols = sorted([c for c in df if c.startswith(f"{target}_lag")])
+        # build a flat neighbor‐map table
+        src = np.repeat(self.ids_, self.k)
+        dst = self.ids_[self.neigh_idx.flatten()]
+        neigh_map = pd.DataFrame({self.id_col: src, "neigh_id": dst})
 
-        # Loop row-by-row
-        for i, (geom, date) in enumerate(zip(df[self.id_col], df["date"])):
-            pos = self.id_to_pos[geom]
-            neigh_pos = self.neigh_idx[pos]
-            neigh_ids = self.ids_[neigh_pos]
-            mask = (df[self.id_col].isin(neigh_ids)) & (df["date"] == date)
-            neigh_block = df.loc[mask, lag_cols]
-            if not neigh_block.empty:
-                out[i, :] = neigh_block.mean().values
-
-        cols = [f"neigh_{c}" for c in lag_cols]
-        return pd.DataFrame(out, index=df.index, columns=cols)
+        # original lag‐features + date
+        core = df[[self.id_col, "date"] + lag_cols]
+        # neighbour lag‐features by merge
+        merged = (
+            neigh_map
+            .merge(core, on=self.id_col)
+            .rename(columns={self.id_col: "orig_id"})
+            .merge(core.rename(columns={self.id_col: "neigh_id"}), 
+                   on=["neigh_id","date"], 
+                   suffixes=("","_nbr"))
+        )
+        # average per original id+date
+        agg = (
+            merged
+            .groupby(["orig_id","date"])
+            [[c+"_nbr" for c in lag_cols]]
+            .mean()
+            .rename(columns=lambda c: "neigh_"+c.replace("_nbr",""))
+            .reset_index()
+            .rename(columns={"orig_id": self.id_col})
+        )
+        # merge back
+        return df.merge(agg, on=[self.id_col,"date"], how="left")
