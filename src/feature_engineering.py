@@ -1,3 +1,13 @@
+import re
+from pathlib import Path
+import geopandas as gpd
+import pandas as pd
+import numpy as np
+from sklearn.neighbors import NearestNeighbors
+import shap
+
+DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
 def load_mesh_series(folder: Path,
                      id_col: str = "geom_id",
                      target: str = "no2_mean",
@@ -91,3 +101,111 @@ class NeighborAggregator:
         )
         # merge back
         return df.merge(agg, on=[self.id_col,"date"], how="left")
+    
+import matplotlib.pyplot as plt
+
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error, r2_score
+
+# ─── New functions ──────────────────────────────────────────────────────────
+
+def train_rf_pipeline(
+    X_train: pd.DataFrame, 
+    y_train: pd.Series,
+    rf_params: dict | None = None
+) -> Pipeline:
+    """
+    Build and fit a standard scaler + RF pipeline.
+    Returns the fitted Pipeline.
+    """
+    rf_params = rf_params or {
+        "n_estimators": 200,
+        "max_depth": 15,
+        "n_jobs": -1,
+        "random_state": 42,
+        "oob_score": True
+    }
+    pipe = Pipeline([
+        ("scaler", StandardScaler()),
+        ("rf", RandomForestRegressor(**rf_params))
+    ])
+    pipe.fit(X_train, y_train)
+    return pipe
+
+def evaluate_model(
+    pipeline: Pipeline,
+    X_test: pd.DataFrame,
+    y_test: pd.Series
+) -> dict:
+    """
+    Compute OOB (if available), test R² and RMSE.
+    """
+    rf = pipeline.named_steps["rf"]
+    preds = pipeline.predict(X_test)
+    return {
+        "oob_r2": getattr(rf, "oob_score_", None),
+        "test_r2": r2_score(y_test, preds),
+        "test_rmse": np.sqrt(mean_squared_error(y_test, preds))
+    }
+
+def explain_shap(
+    pipeline: Pipeline,
+    X_bg: pd.DataFrame,
+    X_eval: pd.DataFrame,
+    max_display: int = 15
+) -> tuple[shap.Explainer, np.ndarray]:
+    """
+    Compute and plot SHAP summary (bar + beeswarm).
+    Returns (explainer, shap_values).
+    """
+    explainer = shap.TreeExplainer(
+        pipeline.named_steps["rf"],
+        data=X_bg,
+        feature_perturbation="interventional"
+    )
+    shap_vals = explainer.shap_values(X_eval)
+    # summary visuals
+    shap.plots.bar(shap_vals, max_display=max_display)
+    shap.plots.beeswarm(shap_vals, max_display=max_display)
+    return explainer, shap_vals
+
+def plot_shap_dependence(
+    explainer: shap.Explainer,
+    shap_vals: np.ndarray,
+    X_eval: pd.DataFrame,
+    top_k: int = 2
+) -> None:
+    """
+    Identify top_k features by mean(|SHAP|) and render dependence plots.
+    """
+    mean_abs = np.abs(shap_vals).mean(0)
+    top_feats = np.array(X_eval.columns)[np.argsort(mean_abs)[-top_k:]]
+    for feat in top_feats:
+        shap.dependence_plot(feat, shap_vals, X_eval)
+
+def compute_elasticities_shap(
+    pipeline: Pipeline,
+    X: pd.DataFrame,
+    shap_vals: np.ndarray,
+    low_q: float = 0.25,
+    high_q: float = 0.75
+) -> pd.DataFrame:
+    """
+    Approximate elasticities via SHAP:
+      eᵢ = median over samples of [ (ϕᵢ / ŷ) * (xᵢ / Δxᵢ) ]
+    where Δxᵢ = Q_hi - Q_lo.
+    """
+    y_hat = pipeline.predict(X)
+    qs = X.quantile([low_q, high_q])
+    dx = qs.loc[high_q] - qs.loc[low_q]
+
+    rels = (shap_vals / y_hat[:, None]) * (X.values / dx.values[None, :])
+    elas = pd.DataFrame({
+        "feature": X.columns,
+        "median_elasticity": np.median(rels, axis=0),
+        "p10":             np.percentile(rels, 10, axis=0),
+        "p90":             np.percentile(rels, 90, axis=0),
+    })
+    return elas.sort_values("median_elasticity", ascending=False)
