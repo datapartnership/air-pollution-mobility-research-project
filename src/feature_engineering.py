@@ -150,9 +150,9 @@ def explain_shap(
     X_background: pd.DataFrame,
     X_eval: pd.DataFrame,
     max_display: int = 15
-) -> shap.Explanation:
+) -> tuple[shap.TreeExplainer, shap.Explanation]:
     """
-    Returns a SHAP Explanation object on X_eval (using X_background for background data),
+    Returns a SHAP TreeExplainer plus an Explanation object for X_eval,
     and emits the bar + beeswarm summary plots.
     """
     explainer = shap.TreeExplainer(
@@ -160,10 +160,11 @@ def explain_shap(
         data=X_background,
         feature_perturbation="interventional"
     )
-    shap_exp = explainer(X_eval)  # returns an Explanation object
+    # new API: calling the explainer gives an Explanation object
+    shap_exp = explainer(X_eval)
     shap.plots.bar(shap_exp, max_display=max_display)
     shap.plots.beeswarm(shap_exp, max_display=max_display)
-    return shap_exp
+    return explainer, shap_exp
 
 # ─── 4) DEPENDENCE PLOTS FOR TOP-K FEATURES ────────────────────────────────────
 def plot_shap_dependence(
