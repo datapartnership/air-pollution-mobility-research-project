@@ -189,3 +189,74 @@ def load_gpkgs(data_folder: Path) -> List[gpd.GeoDataFrame]:
         except Exception as e:
             print(f"Failed to read {file}, error: {e}")
     return gdfs
+
+
+import geopandas as gpd
+import pandas as pd
+import fiona
+from pathlib import Path
+
+def fill_tci_to_gpkg(
+        gpkg_folder: Path, 
+        tci_csv_folder: Path, 
+        output_folder: Path
+):
+    """
+    Inject TCI values into each mesh GPKG file and save to a new GPKG file.
+
+    Parameters
+    ----------
+    - gpkg_folder: Path 
+        Path to the folder containing empty mesh GPKG files.
+    - tci_csv_folder: Path
+        Path to the folder containing 'tci_baghdad_2023.csv' and 'tci_baghdad_2024.csv'.
+    - output_folder: Path
+        Path to the folder where the output GPKG files will be saved.
+    """
+    output_folder.mkdir(exist_ok=True, parents=True)
+
+    # Read and merge TCI data from both years
+    df1 = pd.read_csv(tci_csv_folder / 'tci_baghdad_2023.csv')
+    df2 = pd.read_csv(tci_csv_folder / 'tci_baghdad_2024.csv')
+    df = pd.concat([df1, df2], axis=1)
+    df = df.loc[:, ~df.columns.duplicated()]  # Remove duplicate columns
+
+    # Complete full date range from 2023-01-01 to 2024-12-31
+    non_date_cols = ["geom_id", "geometry"]
+    date_cols = [col for col in df.columns if col not in non_date_cols]
+
+    full_dates = pd.date_range(start="2023-01-01", end="2024-12-31")
+    full_date_strs = [d.strftime("%Y-%m-%d") for d in full_dates]
+
+    # Add missing date columns with NaN
+    missing_dates = sorted(set(full_date_strs) - set(date_cols))
+    for missing in missing_dates:
+        df[missing] = pd.NA
+
+    # Reorder columns: non-date columns first, then sorted dates
+    ordered_columns = non_date_cols + sorted(full_date_strs)
+    df = df[ordered_columns]
+
+    # Iterate through each GPKG file
+    for gpkg_path in gpkg_folder.glob("*.gpkg"):
+        try:
+            layer_name = fiona.listlayers(gpkg_path)[0]
+            output_name = gpkg_path.stem
+            date_str = gpkg_path.stem.split("baghdad-")[-1].split(".gpkg")[0]
+
+            print(f"Processing file: {output_name}")
+
+            gdf = gpd.read_file(gpkg_path, layer=layer_name)
+
+            if date_str not in df.columns:
+                print(f"[Skipped] {date_str} not found in TCI data")
+                continue
+
+            # Inject TCI value for that specific date
+            gdf["TCI"] = df[date_str].values  # Ensure row count matches
+
+            output_file = output_folder / f"{output_name}.gpkg"
+            gdf.to_file(output_file, layer=layer_name, driver="GPKG")
+
+        except Exception as e:
+            print(f"[Error] Failed to process {gpkg_path.name}: {e}")
