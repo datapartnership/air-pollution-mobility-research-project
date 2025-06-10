@@ -102,6 +102,7 @@ class NeighborAggregator:
         # merge back
         return df.merge(agg, on=[self.id_col,"date"], how="left")
     
+import shap
 import matplotlib.pyplot as plt
 
 from sklearn.pipeline import Pipeline
@@ -109,17 +110,12 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score
 
-# ─── New functions ──────────────────────────────────────────────────────────
-
+# ─── 1) TRAIN RF PIPELINE ─────────────────────────────────────────────────────
 def train_rf_pipeline(
-    X_train: pd.DataFrame, 
+    X_train: pd.DataFrame,
     y_train: pd.Series,
     rf_params: dict | None = None
 ) -> Pipeline:
-    """
-    Build and fit a standard scaler + RF pipeline.
-    Returns the fitted Pipeline.
-    """
     rf_params = rf_params or {
         "n_estimators": 200,
         "max_depth": 15,
@@ -134,78 +130,83 @@ def train_rf_pipeline(
     pipe.fit(X_train, y_train)
     return pipe
 
+# ─── 2) EVALUATE METRICS ──────────────────────────────────────────────────────
 def evaluate_model(
     pipeline: Pipeline,
     X_test: pd.DataFrame,
     y_test: pd.Series
 ) -> dict:
-    """
-    Compute OOB (if available), test R² and RMSE.
-    """
     rf = pipeline.named_steps["rf"]
-    preds = pipeline.predict(X_test)
+    y_pred = pipeline.predict(X_test)
     return {
         "oob_r2": getattr(rf, "oob_score_", None),
-        "test_r2": r2_score(y_test, preds),
-        "test_rmse": np.sqrt(mean_squared_error(y_test, preds))
+        "test_r2": r2_score(y_test, y_pred),
+        "test_rmse": np.sqrt(mean_squared_error(y_test, y_pred))
     }
 
+# ─── 3) SHAP EXPLANATION & SUMMARY PLOTS ──────────────────────────────────────
 def explain_shap(
     pipeline: Pipeline,
-    X_bg: pd.DataFrame,
+    X_background: pd.DataFrame,
     X_eval: pd.DataFrame,
     max_display: int = 15
-) -> tuple[shap.Explainer, np.ndarray]:
+) -> shap.Explanation:
     """
-    Compute and plot SHAP summary (bar + beeswarm).
-    Returns (explainer, shap_values).
+    Returns a SHAP Explanation object on X_eval (using X_background for background data),
+    and emits the bar + beeswarm summary plots.
     """
     explainer = shap.TreeExplainer(
         pipeline.named_steps["rf"],
-        data=X_bg,
+        data=X_background,
         feature_perturbation="interventional"
     )
-    shap_vals = explainer.shap_values(X_eval)
-    # summary visuals
-    shap.plots.bar(shap_vals, max_display=max_display)
-    shap.plots.beeswarm(shap_vals, max_display=max_display)
-    return explainer, shap_vals
+    shap_exp = explainer(X_eval)  # returns an Explanation object
+    shap.plots.bar(shap_exp, max_display=max_display)
+    shap.plots.beeswarm(shap_exp, max_display=max_display)
+    return shap_exp
 
+# ─── 4) DEPENDENCE PLOTS FOR TOP-K FEATURES ────────────────────────────────────
 def plot_shap_dependence(
-    explainer: shap.Explainer,
-    shap_vals: np.ndarray,
+    shap_exp: shap.Explanation,
     X_eval: pd.DataFrame,
     top_k: int = 2
 ) -> None:
     """
-    Identify top_k features by mean(|SHAP|) and render dependence plots.
+    Computes the top_k features by mean(|SHAP|) and renders dependence_plot for each.
     """
-    mean_abs = np.abs(shap_vals).mean(0)
-    top_feats = np.array(X_eval.columns)[np.argsort(mean_abs)[-top_k:]]
+    # 1) compute mean absolute SHAP per feature
+    mean_abs = np.abs(shap_exp.values).mean(axis=0)
+    # 2) identify top_k feature names
+    top_feats = X_eval.columns[np.argsort(mean_abs)[-top_k:]]
+    # 3) loop and plot
     for feat in top_feats:
-        shap.dependence_plot(feat, shap_vals, X_eval)
+        shap.dependence_plot(feat, shap_exp, X_eval)
 
+# ─── 5) ELASTICITIES VIA SHAP ─────────────────────────────────────────────────
 def compute_elasticities_shap(
     pipeline: Pipeline,
-    X: pd.DataFrame,
-    shap_vals: np.ndarray,
+    shap_exp: shap.Explanation,
     low_q: float = 0.25,
     high_q: float = 0.75
 ) -> pd.DataFrame:
     """
-    Approximate elasticities via SHAP:
-      eᵢ = median over samples of [ (ϕᵢ / ŷ) * (xᵢ / Δxᵢ) ]
-    where Δxᵢ = Q_hi - Q_lo.
+    Approximate elasticities eᵢ = medianₘ [(ϕᵢₘ / ŷₘ) * (xᵢₘ / Δxᵢ)]  
+    where Δxᵢ = Q₀.₇₅(xᵢ) – Q₀.₂₅(xᵢ).
     """
+    # unpack
+    X = pd.DataFrame(shap_exp.data, columns=shap_exp.feature_names)
+    shap_vals = shap_exp.values
+    # predictions
     y_hat = pipeline.predict(X)
+    # interquartile
     qs = X.quantile([low_q, high_q])
     dx = qs.loc[high_q] - qs.loc[low_q]
-
+    # compute elementwise elasticity per sample/feature
     rels = (shap_vals / y_hat[:, None]) * (X.values / dx.values[None, :])
     elas = pd.DataFrame({
         "feature": X.columns,
         "median_elasticity": np.median(rels, axis=0),
-        "p10":             np.percentile(rels, 10, axis=0),
-        "p90":             np.percentile(rels, 90, axis=0),
+        "p10": np.percentile(rels, 10, axis=0),
+        "p90": np.percentile(rels, 90, axis=0),
     })
     return elas.sort_values("median_elasticity", ascending=False)
