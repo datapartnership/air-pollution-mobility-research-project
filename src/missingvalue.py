@@ -301,7 +301,14 @@ def fill_nan_with_mode(window: np.ndarray) -> float:
         return center
     neighbors = window[~np.isnan(window)].astype(int)
     neighbors = neighbors[(neighbors != 0) & (neighbors != 255)]
-    return mode(neighbors, keepdims=False).mode[0] if len(neighbors) > 0 else np.nan
+    if neighbors.size == 0:
+        return np.nan
+    try:
+        candidate = mode(neighbors, keepdims=False).mode
+        candidate = candidate if isinstance(candidate, (int, float)) else candidate[0]
+        return candidate if candidate not in [0, 255] else np.nan
+    except Exception:
+        return np.nan
 
 def iterative_fill_categorical(data: np.ndarray, max_iter: int = 10, window_size: int = 9) -> np.ndarray:
     """
@@ -343,23 +350,20 @@ def fill_landcover_data(
     # Iterative fill
     filled_band = iterative_fill_categorical(band)
 
-    # Extract valid values for global mode
+    # Global fallback
     valid_values = filled_band[~np.isnan(filled_band)].astype(int)
     valid_values = valid_values[(valid_values != 0) & (valid_values != 255)]
 
-    # Safe mode fallback
     try:
-        mode_result = mode(valid_values, keepdims=False)
-        candidate = np.atleast_1d(mode_result.mode)[0]
+        candidate = mode(valid_values, keepdims=False).mode
+        candidate = candidate if isinstance(candidate, (int, float)) else candidate[0]
         global_mode = candidate if candidate not in [0, 255] else 13
     except Exception:
         global_mode = 13
 
-    # Final fill for remaining NaNs or illegal values
     filled_band = np.where(np.isnan(filled_band), global_mode, filled_band)
     filled_band = np.where((filled_band == 0) | (filled_band == 255), global_mode, filled_band)
 
-    # Write to file
     profile.update(nodata=nodata_val)
     with rasterio.open(output_tiff_path, 'w', **profile) as dst:
         dst.write(filled_band.astype(profile["dtype"]), 1)
