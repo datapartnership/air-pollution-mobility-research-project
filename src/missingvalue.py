@@ -214,3 +214,57 @@ def fill_ntl_missing_data(
         with rasterio.open(output_file, 'w', **profile) as dst:
             filled_band = np.where(np.isnan(band_filled), nodata_value, band_filled)
             dst.write(filled_band.astype(profile['dtype']), 1)
+
+from pathlib import Path
+import numpy as np
+import rasterio
+from missingvalue import read_tiff, iterative_fill
+
+def fill_surface_temperature_data(
+    city: str,
+    data_tiff_path: Path,
+    output_path: Path
+) -> None:
+    """
+    補齊 MODIS LST GeoTIFF 中的 NaN 值，根據檔名中的 YYYY_MM_DD 日期格式進行處理。
+
+    參數
+    ----------
+    city : str
+        城市名稱（用於命名輸出資料夾與檔案）。
+    data_tiff_path : Path
+        TIFF 檔所在資料夾。
+    output_path : Path
+        輸出資料夾（將自動建立 city-LST-filled 子資料夾）。
+
+    輸出
+    -------
+    每日填補後的 GeoTIFF，命名格式為：
+    {city}_LST_YYYY-MM-DD_filled.tif
+    """
+
+    tiff_files = sorted(data_tiff_path.glob("*.tif"))
+    output_dir = output_path / f"{city}-LST-filled"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for index, tiff_path in enumerate(tiff_files):
+        # 從檔名中擷取日期資訊（YYYY_MM_DD）
+        parts = tiff_path.stem.split("_")
+        try:
+            date = f"{parts[-3]}-{parts[-2]}-{parts[-1]}"
+        except IndexError:
+            print(f"[跳過] 無法從檔名解析日期：{tiff_path.name}")
+            continue
+
+        print(f"[{index + 1}/{len(tiff_files)}] 處理日期：{date}")
+
+        src, band, profile, nodata_value = read_tiff(str(tiff_path))
+        if nodata_value is not None:
+            band = np.where(band == nodata_value, np.nan, band)
+
+        band_filled = iterative_fill(band, max_iter=10, window_size=9)
+
+        output_file = output_dir / f"{city}_LST_{date}_filled.tif"
+        with rasterio.open(output_file, 'w', **profile) as dst:
+            filled_band = np.where(np.isnan(band_filled), nodata_value, band_filled)
+            dst.write(filled_band.astype(profile['dtype']), 1)
