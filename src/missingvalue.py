@@ -352,6 +352,8 @@ def fill_landcover_data(
 
     # Replace any remaining NaN with global mode
     valid_values = filled_band[~np.isnan(filled_band)].astype(int)
+    valid_values = valid_values[(valid_values != 0) & (valid_values != 255)]  # remove illegal values
+
     global_mode = mode(valid_values, keepdims=False).mode[0]
     filled_band = np.where(np.isnan(filled_band), global_mode, filled_band)
 
@@ -359,3 +361,5 @@ def fill_landcover_data(
     profile.update(nodata=nodata_val)
     with rasterio.open(output_tiff_path, 'w', **profile) as dst:
         dst.write(filled_band.astype(profile["dtype"]), 1)
+    
+    
