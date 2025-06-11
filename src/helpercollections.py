@@ -262,3 +262,128 @@ def fill_tci_to_gpkg(
 
         except Exception as e:
             print(f"[Error] Failed to process {gpkg_path.name}: {e}")
+
+
+
+import geopandas as gpd
+import pandas as pd
+import fiona
+from pathlib import Path
+
+def fill_tci_to_gpkg(
+        gpkg_folder: Path, 
+        tci_csv_folder: Path, 
+        output_folder: Path
+):
+    """
+    Inject TCI values into each mesh GPKG file and save to a new GPKG file.
+
+    Parameters
+    ----------
+    - gpkg_folder: Path 
+        Path to the folder containing empty mesh GPKG files.
+    - tci_csv_folder: Path
+        Path to the folder containing 'tci_baghdad_2023.csv' and 'tci_baghdad_2024.csv'.
+    - output_folder: Path
+        Path to the folder where the output GPKG files will be saved.
+    """
+    output_folder.mkdir(exist_ok=True, parents=True)
+
+    # Read and merge TCI data from both years
+    df1 = pd.read_csv(tci_csv_folder / 'tci_baghdad_2023.csv')
+    df2 = pd.read_csv(tci_csv_folder / 'tci_baghdad_2024.csv')
+    df = pd.concat([df1, df2], axis=1)
+    df = df.loc[:, ~df.columns.duplicated()]  # Remove duplicate columns
+    df = df.fillna(0)  # Set NA to 0
+
+    # Complete full date range from 2023-01-01 to 2024-12-31
+    non_date_cols = ["geom_id", "geometry"]
+    date_cols = [col for col in df.columns if col not in non_date_cols]
+
+    full_dates = pd.date_range(start="2023-01-01", end="2024-12-31")
+    full_date_strs = [d.strftime("%Y-%m-%d") for d in full_dates]
+
+    # Add missing date columns with NaN
+    missing_dates = sorted(set(full_date_strs) - set(date_cols))
+    for missing in missing_dates:
+        df[missing] = 0.0
+
+    # Reorder columns: non-date columns first, then sorted dates
+    ordered_columns = non_date_cols + sorted(full_date_strs)
+    df = df[ordered_columns]
+
+    # Iterate through each GPKG file
+    for gpkg_path in gpkg_folder.glob("*.gpkg"):
+        try:
+            layer_name = fiona.listlayers(gpkg_path)[0]
+            output_name = gpkg_path.stem
+            date_str = gpkg_path.stem.split("baghdad-")[-1].split(".gpkg")[0]
+
+            print(f"Processing file: {output_name}")
+
+            gdf = gpd.read_file(gpkg_path, layer=layer_name)
+
+            if date_str not in df.columns:
+                print(f"[Skipped] {date_str} not found in TCI data")
+                continue
+
+            # Inject TCI value for that specific date
+            gdf["TCI"] = df[date_str].values  # Ensure row count matches 
+
+            output_file = output_folder / f"{output_name}.gpkg"
+            gdf.to_file(output_file, layer=layer_name, driver="GPKG")
+
+        except Exception as e:
+            print(f"[Error] Failed to process {gpkg_path.name}: {e}")
+
+
+def clip_cloud_tiff_by_bbox(city, data_tiff_path, output_path,
+                    min_lon, min_lat, max_lon, max_lat):
+    """
+    Clip all GeoTIFF files in a folder by a bounding box,
+    and save clipped rasters to a new folder.
+
+    Parameters:
+    - city (str): City name used to name output folder
+    - data_tiff_path (Path): Folder containing input GeoTIFF files
+    - output_path (Path): Folder to save clipped GeoTIFF files
+    - min_lon, min_lat, max_lon, max_lat (float): bounding box coords
+
+    Returns:
+    - output_dir (Path): Path of folder containing clipped TIFFs
+    """
+    if not isinstance(data_tiff_path, Path):
+        data_tiff_path = Path(data_tiff_path)
+    if not isinstance(output_path, Path):
+        output_path = Path(output_path)
+
+    tiff_files = sorted(data_tiff_path.glob("*.tif"))
+    n_task = len(tiff_files)
+
+    output_dir = output_path / f"{city}-cloud-clipped"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    bbox = box(min_lon, min_lat, max_lon, max_lat)
+    geo = [mapping(bbox)]
+
+    for index, tiff_path in enumerate(tiff_files):
+        print(f"Processing {index + 1}/{n_task}: {tiff_path.name}")
+
+        with rasterio.open(tiff_path) as src:
+            out_image, out_transform = mask(src, geo, crop=True)
+            out_meta = src.meta.copy()
+
+        out_meta.update({
+            "driver": "GTiff",
+            "height": out_image.shape[1],
+            "width": out_image.shape[2],
+            "transform": out_transform
+        })
+
+        output_tiff_path = output_dir / tiff_path.name
+
+        with rasterio.open(output_tiff_path, "w", **out_meta) as dest:
+            dest.write(out_image)
+
+    print(f"All clipped TIFF files saved to {output_dir}")
+    return output_dir

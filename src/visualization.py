@@ -95,6 +95,157 @@ def plot_raster(
     return ax, cbar_ax
 
 
+
+def plot_raster_ntl(
+    arr: np.ndarray,
+    percent_clip: float = 0.5,
+    title: str = "Raster Visualization",
+    colors: Union[List[str], None] = None,
+    ax: Optional[plt.Axes] = None,
+    cbar: bool = True,
+    cbar_label: str = "Night Time Light (percent-clipped)",
+    imshow_kwargs: Optional[dict] = None,
+    cbar_kwargs: Optional[dict] = None,
+) -> Tuple[plt.Axes, Optional[plt.Axes]]:
+    """
+    Display a 2D raster image with percent-based value clipping and custom colormap.
+
+    Parameters
+    ----------
+    arr : np.ndarray
+        2D raster array with missing values marked as np.nan.
+    percent_clip : float, default 0.5
+        Percentage of the lower and upper tails to clip when computing color bounds.
+    colors : list[str] | None, optional
+        List of color names to define a custom colormap.
+    ax : matplotlib.axes.Axes | None, optional
+        Existing matplotlib axes to draw on. If None, a new figure and axes are created.
+    cbar : bool, default True
+        Whether to include a colorbar in the plot.
+    cbar_label : str, default "NO₂ (percent-clipped)"
+        Label for the colorbar.
+    imshow_kwargs : dict | None, optional
+        Additional keyword arguments to pass to `imshow()`.
+    cbar_kwargs : dict | None, optional
+        Additional keyword arguments to pass to `colorbar()`.
+
+    Returns
+    -------
+    ax : plt.Axes
+        The axes containing the image.
+    cbar_ax : plt.Axes or None
+        The colorbar axes if `cbar` is True; otherwise None.
+    """
+    if colors is None:
+        colors = ["blue", "cyan", "yellow", "red"]
+
+    # Flatten and clean the array to compute percentiles
+    flat = arr[~np.isnan(arr)].ravel()
+    vmin = np.percentile(flat, percent_clip)
+    vmax = np.percentile(flat, 100 - percent_clip)
+
+    # Normalize and create colormap
+    norm = Normalize(vmin=vmin, vmax=vmax, clip=True)
+    cmap = LinearSegmentedColormap.from_list("custom_map", colors)
+
+    # Create new figure and axes if none provided
+    created_new_ax = False
+    if ax is None:
+        _, ax = plt.subplots(figsize=(6, 6))
+        created_new_ax = True
+
+    # Apply imshow with extra kwargs
+    imshow_kwargs = imshow_kwargs or {}
+    img = ax.imshow(arr, cmap=cmap, norm=norm, **imshow_kwargs)
+    ax.set_axis_off()
+    ax.set_title(title)
+
+    # Add colorbar if requested
+    cbar_ax = None
+    if cbar:
+        cbar_kwargs = cbar_kwargs or {}
+        cbar_ax = plt.colorbar(img, ax=ax, label=cbar_label, **cbar_kwargs)
+
+    if created_new_ax:
+        plt.show()
+
+    return ax, cbar_ax
+
+def plot_raster_temp(
+    arr: np.ndarray,
+    percent_clip: float = 0.5,
+    title: str = "Raster Visualization",
+    colors: Union[List[str], None] = None,
+    ax: Optional[plt.Axes] = None,
+    cbar: bool = True,
+    cbar_label: str = "Temperature (percent-clipped)",
+    imshow_kwargs: Optional[dict] = None,
+    cbar_kwargs: Optional[dict] = None,
+) -> Tuple[plt.Axes, Optional[plt.Axes]]:
+    """
+    Display a 2D raster image with percent-based value clipping and custom colormap.
+
+    Parameters
+    ----------
+    arr : np.ndarray
+        2D raster array with missing values marked as np.nan.
+    percent_clip : float, default 0.5
+        Percentage of the lower and upper tails to clip when computing color bounds.
+    colors : list[str] | None, optional
+        List of color names to define a custom colormap.
+    ax : matplotlib.axes.Axes | None, optional
+        Existing matplotlib axes to draw on. If None, a new figure and axes are created.
+    cbar : bool, default True
+        Whether to include a colorbar in the plot.
+    cbar_label : str, default "NO₂ (percent-clipped)"
+        Label for the colorbar.
+    imshow_kwargs : dict | None, optional
+        Additional keyword arguments to pass to `imshow()`.
+    cbar_kwargs : dict | None, optional
+        Additional keyword arguments to pass to `colorbar()`.
+
+    Returns
+    -------
+    ax : plt.Axes
+        The axes containing the image.
+    cbar_ax : plt.Axes or None
+        The colorbar axes if `cbar` is True; otherwise None.
+    """
+    if colors is None:
+        colors = ["blue", "cyan", "yellow", "red"]
+
+    # Flatten and clean the array to compute percentiles
+    flat = arr[~np.isnan(arr)].ravel()
+    vmin = np.percentile(flat, percent_clip)
+    vmax = np.percentile(flat, 100 - percent_clip)
+
+    # Normalize and create colormap
+    norm = Normalize(vmin=vmin, vmax=vmax, clip=True)
+    cmap = LinearSegmentedColormap.from_list("custom_map", colors)
+
+    # Create new figure and axes if none provided
+    created_new_ax = False
+    if ax is None:
+        _, ax = plt.subplots(figsize=(6, 6))
+        created_new_ax = True
+
+    # Apply imshow with extra kwargs
+    imshow_kwargs = imshow_kwargs or {}
+    img = ax.imshow(arr, cmap=cmap, norm=norm, **imshow_kwargs)
+    ax.set_axis_off()
+    ax.set_title(title)
+
+    # Add colorbar if requested
+    cbar_ax = None
+    if cbar:
+        cbar_kwargs = cbar_kwargs or {}
+        cbar_ax = plt.colorbar(img, ax=ax, label=cbar_label, **cbar_kwargs)
+
+    if created_new_ax:
+        plt.show()
+
+    return ax, cbar_ax
+
 def plot_mesh(
     mesh: gpd.GeoDataFrame,
     feature: str,
@@ -631,3 +782,158 @@ def show_image(file_path):
     plt.imshow(img)
     plt.axis('off') 
     plt.show()
+    
+    
+from pathlib import Path
+from typing import Union, List
+import numpy as np
+import rasterio
+from matplotlib import pyplot as plt
+from matplotlib.colors import ListedColormap
+from matplotlib.animation import FuncAnimation, PillowWriter
+from tqdm import tqdm
+
+
+def tiff_2_gif_cloud(
+    tiff_path: Path,
+    output_path: Path,
+    output_name: str = "cloud_states",
+    fps: int = 4,
+    colors: Union[List[str], None] = None,
+    class_labels: Union[List[str], None] = None,
+):
+    """
+    Create an animated GIF from classified TIFF files (e.g., cloud state classes 0-3).
+
+    Parameters
+    ----------
+    tiff_path : Path
+        Directory containing input .tif files.
+    output_path : Path
+        Directory where the output will be saved.
+    output_name : str
+        Name of the output GIF file (without extension).
+    fps : int
+        Frames per second for the animation.
+    colors : list of str
+        Color for each class value, e.g., ["green", "red", "orange", "gray"] for class 0-3.
+    class_labels : list of str
+        Labels for the colorbar ticks, matching class values.
+    """
+    # ------------------------------------------------------------
+    # Collect TIFF files
+    # ------------------------------------------------------------
+    tif_files = sorted(tiff_path.glob("*.tif"))
+    if not tif_files:
+        raise FileNotFoundError("No .tif files found in the directory.")
+
+    dates = [f.stem for f in tif_files]  # Use file name for label
+
+    # ------------------------------------------------------------
+    # Prepare color map for classification
+    # ------------------------------------------------------------
+    if colors is None:
+        colors = ["green", "red", "orange", "gray"]  # 0 = Clear, 1 = Cloudy, etc.
+
+    n_classes = len(colors)
+    cmap = ListedColormap(colors)
+    vmin = 0
+    vmax = n_classes - 1
+
+    # ------------------------------------------------------------
+    # Plot first frame
+    # ------------------------------------------------------------
+    with rasterio.open(tif_files[0]) as src:
+        first = src.read(1)
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    img = ax.imshow(first, cmap=cmap, vmin=vmin, vmax=vmax)
+    cbar = plt.colorbar(img, ax=ax, ticks=list(range(n_classes)), fraction=0.046, pad=0.04)
+    cbar.set_label("Cloud State")
+
+    if class_labels:
+        cbar.ax.set_yticklabels(class_labels)
+
+    txt = ax.text(
+        0.02, 0.96, "", transform=ax.transAxes,
+        color="white", fontsize=11, ha="left", va="top",
+        bbox=dict(facecolor="black", alpha=0.3, pad=2, lw=0),
+    )
+    ax.set_axis_off()
+
+    # ------------------------------------------------------------
+    # Update function per frame
+    # ------------------------------------------------------------
+    def update(i: int):
+        with rasterio.open(tif_files[i]) as src:
+            arr = src.read(1)
+        img.set_data(arr)
+        txt.set_text(f"Date: {dates[i]}")
+        return img, txt
+
+    anim = FuncAnimation(
+        fig, update, frames=len(tif_files),
+        interval=1000 / fps, blit=True,
+    )
+
+    # ------------------------------------------------------------
+    # Save output
+    # ------------------------------------------------------------
+    output_dir = output_path / "animation-output"
+    output_dir.mkdir(exist_ok=True)
+    gif_path = output_dir / f"{output_name}.gif"
+
+    anim.save(gif_path, writer=PillowWriter(fps=fps))
+    plt.close(fig)
+
+    print(f"GIF saved to: {gif_path}")
+
+
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+from matplotlib.patches import Patch
+
+
+def plot_cloud_category(mesh_grid_path, title):
+    import geopandas as gpd
+    import matplotlib.pyplot as plt
+    import matplotlib.colors as mcolors
+    from matplotlib.patches import Patch
+
+    mesh_grid = gpd.read_file(mesh_grid_path)
+
+    category_colors = {
+        0: "skyblue",      # Clear
+        1: "gray",         # Cloudy
+        2: "orange",       # Mixed
+        3: "lightgreen"    # Not set (assumed clear)
+    }
+    category_labels = {
+        0: "0 - Clear",
+        1: "1 - Cloudy",
+        2: "2 - Mixed",
+        3: "3 - Not set (assumed clear)"
+    }
+
+    cloud_cmap = mcolors.ListedColormap([category_colors[k] for k in category_colors])
+    bounds = [-0.5, 0.5, 1.5, 2.5, 3.5]
+    norm = mcolors.BoundaryNorm(bounds, cloud_cmap.N)
+
+    fig, ax = plt.subplots(figsize=(10, 10))
+    mesh_grid.plot(
+        column="cloud_category",
+        cmap=cloud_cmap,
+        norm=norm,
+        linewidth=0.2,
+        edgecolor="white",
+        ax=ax
+    )
+
+    legend_elements = [
+        Patch(facecolor=category_colors[k], edgecolor='black', label=category_labels[k])
+        for k in sorted(category_colors)
+    ]
+    
+    ax.legend(handles=legend_elements, title="Cloud Category", loc="lower left")
+    ax.set_title(title, fontsize=12)
+    ax.axis("off")
