@@ -277,3 +277,105 @@ def compute_mean_mesh_by_daytype(
     print(f"Saved mean meshes to {output_file}")
 
     return final_gdf
+
+import geopandas as gpd
+import numpy as np
+from rasterstats import zonal_stats
+from pathlib import Path
+import rasterio
+import matplotlib.pyplot as plt
+import rasterio.plot
+
+def aggregate_cloud_to_mesh(mesh_gpkg_path: Path, 
+                            tiff_path: Path,
+                            feature_name: str) -> gpd.GeoDataFrame:
+    """
+    Aggregates cloud state (0–3) using majority value per mesh cell.
+    """
+    import rasterio
+
+    # 1. Load mesh
+    mesh_grid = gpd.read_file(mesh_gpkg_path)
+
+    # 2. Check nodata value
+    with rasterio.open(tiff_path) as src:
+        nodata_val = src.nodata if src.nodata is not None else 255  # 默认假设 255 为 nodata
+
+    # 3. Run zonal stats
+    stats = zonal_stats(
+        vectors=mesh_grid,
+        raster=str(tiff_path),
+        categorical=True,
+        nodata=nodata_val,
+        all_touched=True,
+        geojson_out=False
+    )
+
+    # 4. Get majority value
+    def get_majority(cat_counts):
+        if not cat_counts or not isinstance(cat_counts, dict):
+            return np.nan
+        return max(cat_counts.items(), key=lambda kv: kv[1])[0]
+
+    mesh_grid[feature_name] = [get_majority(s) for s in stats]
+    print(mesh_grid[[feature_name]].value_counts(dropna=False))
+
+    return mesh_grid
+
+
+
+
+
+
+import re
+
+def aggregate_cloud_data(
+        data_tiff_path: Path, 
+        mesh_path: Path,
+        feature_name: str,
+        layer_name: str
+    ) -> None:
+    """
+    For each cloud-state TIFF, find the matching mesh GPKG (by date in filename),
+    aggregate by majority to that mesh, and overwrite the mesh layer.
+
+    Parameters
+    ----------
+    data_tiff_path : Path
+        Directory containing cloud-state .tif files (e.g. baghdad_cloud_2023-01-01_filled.tif).
+    mesh_path : Path
+        Directory containing mesh GPKG files (e.g. baghdad-2023-01-01.gpkg).
+    feature_name : str
+        Column name to store the aggregated cloud state.
+    layer_name : str
+        Layer name when writing back to GPKG.
+    """
+    tiff_files = sorted(f for f in data_tiff_path.glob("*.tif"))
+    n_task = len(tiff_files)
+
+    for idx, tiff_path in enumerate(tiff_files, 1):
+        # Extract YYYY-MM-DD from TIFF filename
+        m = re.search(r"\d{4}-\d{2}-\d{2}", tiff_path.name)
+        if not m:
+            print(f"[{idx}/{n_task}] ⚠ Cannot extract date from {tiff_path.name}, skipping")
+            continue
+        date_str = m.group(0)
+        print(f"[{idx}/{n_task}] Aggregating cloud state: {date_str}")
+
+        # Find the matching mesh GPKG
+        meshes = list(mesh_path.glob(f"*{date_str}*.gpkg"))
+        if not meshes:
+            print(f"No matching mesh found for {date_str}, skipping")
+            continue
+        mesh_gpkg = meshes[0]
+
+        try:
+            # Generate GeoDataFrame with new column
+            new_mesh = aggregate_cloud_to_mesh(mesh_gpkg, tiff_path, feature_name)
+
+            # Write back to the same GPKG (overwrite or create layer)
+            new_mesh.to_file(mesh_gpkg, driver="GPKG", layer=layer_name, mode="w")
+            print(f"Layer '{layer_name}' written to {mesh_gpkg.name}")
+        except Exception as err:
+            print(f"Processing failed: {err}")
+            continue
