@@ -691,7 +691,7 @@ def plot_feature_correlation_heatmap(
     corr_matrix = numeric_df.corr(method='pearson')
 
     # Visualize as heatmap
-    plt.figure(figsize=(12, 10))
+    plt.figure(figsize=(14, 12))
     sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap="coolwarm", square=True)
     plt.title(plot_name)
     plt.tight_layout()
