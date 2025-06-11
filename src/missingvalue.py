@@ -323,13 +323,52 @@ def iterative_fill_categorical(data: np.ndarray, max_iter: int = 10, window_size
             break
     return filled
 
+from pathlib import Path
+import numpy as np
+import rasterio
+from scipy.ndimage import generic_filter
+from scipy.stats import mode
+
+def fill_nan_with_mode(window: np.ndarray) -> float:
+    """
+    Replace the center pixel with the mode of its neighbors if it is NaN.
+    """
+    center = window[len(window) // 2]
+    if not np.isnan(center):
+        return center
+    neighbors = window[~np.isnan(window)].astype(int)
+    neighbors = neighbors[(neighbors != 0) & (neighbors != 255)]  # Remove illegal categories
+    return mode(neighbors, keepdims=False).mode[0] if len(neighbors) > 0 else np.nan
+
+def iterative_fill_categorical(data: np.ndarray, max_iter: int = 10, window_size: int = 9) -> np.ndarray:
+    """
+    Iteratively fill NaN in a categorical raster using neighborhood mode.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        2D array with NaN values.
+    max_iter : int
+        Maximum number of iterations.
+    window_size : int
+        Size of the neighborhood window (must be odd).
+    """
+    filled = data.copy()
+    for _ in range(max_iter):
+        prev_nan_count = np.isnan(filled).sum()
+        filled = generic_filter(filled, function=fill_nan_with_mode, size=window_size, mode='nearest')
+        if np.isnan(filled).sum() == 0 or np.isnan(filled).sum() == prev_nan_count:
+            break
+    return filled
+
 def fill_landcover_data(
     input_tiff_path: Path,
     output_tiff_path: Path,
     default_nodata: int = 255
 ) -> None:
     """
-    Fill missing values in a land cover GeoTIFF using neighborhood mode.
+    Fill missing values in a land cover GeoTIFF using neighborhood mode,
+    excluding invalid values 0 and 255. Fallback global_mode = 13.
 
     Parameters
     ----------
@@ -347,19 +386,27 @@ def fill_landcover_data(
 
     band[band == nodata_val] = np.nan
 
-    # Apply iterative mode-based filling
+    # Apply mode-based fill
     filled_band = iterative_fill_categorical(band)
 
-    # Replace any remaining NaN with global mode
+    # Compute global mode from filled pixels (excluding 0 and 255)
     valid_values = filled_band[~np.isnan(filled_band)].astype(int)
-    valid_values = valid_values[(valid_values != 0) & (valid_values != 255)]  # remove illegal values
+    valid_values = valid_values[(valid_values != 0) & (valid_values != 255)]
 
-    global_mode = mode(valid_values, keepdims=False).mode[0]
+    if valid_values.size == 0:
+        print("[Warning] No valid values found. Using fallback = 13")
+        global_mode = 13
+    else:
+        mode_result = mode(valid_values, keepdims=False).mode
+        global_mode = mode_result[0] if mode_result.size > 0 and mode_result[0] not in [0, 255] else 13
+
+    # Final fill of remaining NaNs
     filled_band = np.where(np.isnan(filled_band), global_mode, filled_band)
 
-    # Write back to file
+    # Ensure output contains only valid integers
+    filled_band = np.where((filled_band == 0) | (filled_band == 255), global_mode, filled_band)
+
+    # Write back to GeoTIFF
     profile.update(nodata=nodata_val)
     with rasterio.open(output_tiff_path, 'w', **profile) as dst:
         dst.write(filled_band.astype(profile["dtype"]), 1)
-    
-    
