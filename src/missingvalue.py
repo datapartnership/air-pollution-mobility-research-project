@@ -226,21 +226,22 @@ def fill_surface_temperature_data(
     output_path: Path
 ) -> None:
     """
-    補齊 MODIS LST GeoTIFF 中的 NaN 值，根據檔名中的 YYYY_MM_DD 日期格式進行處理。
+    Fill NaN values in MODIS LST GeoTIFFs, using iterative window-based mean filtering.
+    If the entire image is NaN, it is kept as NaN for downstream identification.
 
-    參數
+    Parameters
     ----------
     city : str
-        城市名稱（用於命名輸出資料夾與檔案）。
+        City name (used for naming the output folder and files).
     data_tiff_path : Path
-        TIFF 檔所在資料夾。
+        Folder containing the input TIFF files.
     output_path : Path
-        輸出資料夾（將自動建立 city-LST-filled 子資料夾）。
+        Root folder to save the output (a subfolder {city}-LST-filled will be created).
 
-    輸出
+    Output
     -------
-    每日填補後的 GeoTIFF，命名格式為：
-    {city}_LST_YYYY-MM-DD_filled.tif
+    GeoTIFFs with missing values filled or kept as NaN.
+    File naming format: {city}_LST_YYYY-MM-DD_filled.tif
     """
 
     tiff_files = sorted(data_tiff_path.glob("*.tif"))
@@ -248,23 +249,39 @@ def fill_surface_temperature_data(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for index, tiff_path in enumerate(tiff_files):
-        # 從檔名中擷取日期資訊（YYYY_MM_DD）
+        # Extract date from filename
         parts = tiff_path.stem.split("_")
         try:
             date = f"{parts[-3]}-{parts[-2]}-{parts[-1]}"
         except IndexError:
-            print(f"[跳過] 無法從檔名解析日期：{tiff_path.name}")
+            print(f"[Skipped] Unable to parse date from filename: {tiff_path.name}")
             continue
 
-        print(f"[{index + 1}/{len(tiff_files)}] 處理日期：{date}")
+        print(f"[{index + 1}/{len(tiff_files)}] Processing date: {date}")
 
         src, band, profile, nodata_value = read_tiff(str(tiff_path))
+
+        # Replace nodata_value with NaN for processing
         if nodata_value is not None:
             band = np.where(band == nodata_value, np.nan, band)
+        else:
+            nodata_value = -9999  # fallback
+        profile.update(nodata=nodata_value)
 
+        # Fill missing data
         band_filled = iterative_fill(band, max_iter=10, window_size=9)
 
+        # Case 1: Entire image is NaN
+        if np.isnan(band_filled).all():
+            print(f"⚠️ Entire image is NaN: {tiff_path.name}")
+            filled_band = band_filled
+        else:
+            # Case 2: Fill remaining NaNs with global mean
+            global_mean = np.nanmean(band_filled)
+            band_filled = np.where(np.isnan(band_filled), global_mean, band_filled)
+            filled_band = np.where(np.isnan(band_filled), nodata_value, band_filled)
+
+        # Save the output
         output_file = output_dir / f"{city}_LST_{date}_filled.tif"
         with rasterio.open(output_file, 'w', **profile) as dst:
-            filled_band = np.where(np.isnan(band_filled), nodata_value, band_filled)
             dst.write(filled_band.astype(profile['dtype']), 1)
