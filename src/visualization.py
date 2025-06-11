@@ -782,3 +782,158 @@ def show_image(file_path):
     plt.imshow(img)
     plt.axis('off') 
     plt.show()
+    
+    
+from pathlib import Path
+from typing import Union, List
+import numpy as np
+import rasterio
+from matplotlib import pyplot as plt
+from matplotlib.colors import ListedColormap
+from matplotlib.animation import FuncAnimation, PillowWriter
+from tqdm import tqdm
+
+
+def tiff_2_gif_cloud(
+    tiff_path: Path,
+    output_path: Path,
+    output_name: str = "cloud_states",
+    fps: int = 4,
+    colors: Union[List[str], None] = None,
+    class_labels: Union[List[str], None] = None,
+):
+    """
+    Create an animated GIF from classified TIFF files (e.g., cloud state classes 0-3).
+
+    Parameters
+    ----------
+    tiff_path : Path
+        Directory containing input .tif files.
+    output_path : Path
+        Directory where the output will be saved.
+    output_name : str
+        Name of the output GIF file (without extension).
+    fps : int
+        Frames per second for the animation.
+    colors : list of str
+        Color for each class value, e.g., ["green", "red", "orange", "gray"] for class 0-3.
+    class_labels : list of str
+        Labels for the colorbar ticks, matching class values.
+    """
+    # ------------------------------------------------------------
+    # Collect TIFF files
+    # ------------------------------------------------------------
+    tif_files = sorted(tiff_path.glob("*.tif"))
+    if not tif_files:
+        raise FileNotFoundError("No .tif files found in the directory.")
+
+    dates = [f.stem for f in tif_files]  # Use file name for label
+
+    # ------------------------------------------------------------
+    # Prepare color map for classification
+    # ------------------------------------------------------------
+    if colors is None:
+        colors = ["green", "red", "orange", "gray"]  # 0 = Clear, 1 = Cloudy, etc.
+
+    n_classes = len(colors)
+    cmap = ListedColormap(colors)
+    vmin = 0
+    vmax = n_classes - 1
+
+    # ------------------------------------------------------------
+    # Plot first frame
+    # ------------------------------------------------------------
+    with rasterio.open(tif_files[0]) as src:
+        first = src.read(1)
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    img = ax.imshow(first, cmap=cmap, vmin=vmin, vmax=vmax)
+    cbar = plt.colorbar(img, ax=ax, ticks=list(range(n_classes)), fraction=0.046, pad=0.04)
+    cbar.set_label("Cloud State")
+
+    if class_labels:
+        cbar.ax.set_yticklabels(class_labels)
+
+    txt = ax.text(
+        0.02, 0.96, "", transform=ax.transAxes,
+        color="white", fontsize=11, ha="left", va="top",
+        bbox=dict(facecolor="black", alpha=0.3, pad=2, lw=0),
+    )
+    ax.set_axis_off()
+
+    # ------------------------------------------------------------
+    # Update function per frame
+    # ------------------------------------------------------------
+    def update(i: int):
+        with rasterio.open(tif_files[i]) as src:
+            arr = src.read(1)
+        img.set_data(arr)
+        txt.set_text(f"Date: {dates[i]}")
+        return img, txt
+
+    anim = FuncAnimation(
+        fig, update, frames=len(tif_files),
+        interval=1000 / fps, blit=True,
+    )
+
+    # ------------------------------------------------------------
+    # Save output
+    # ------------------------------------------------------------
+    output_dir = output_path / "animation-output"
+    output_dir.mkdir(exist_ok=True)
+    gif_path = output_dir / f"{output_name}.gif"
+
+    anim.save(gif_path, writer=PillowWriter(fps=fps))
+    plt.close(fig)
+
+    print(f"GIF saved to: {gif_path}")
+
+
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+from matplotlib.patches import Patch
+
+
+def plot_cloud_category(mesh_grid_path, title):
+    import geopandas as gpd
+    import matplotlib.pyplot as plt
+    import matplotlib.colors as mcolors
+    from matplotlib.patches import Patch
+
+    mesh_grid = gpd.read_file(mesh_grid_path)
+
+    category_colors = {
+        0: "skyblue",      # Clear
+        1: "gray",         # Cloudy
+        2: "orange",       # Mixed
+        3: "lightgreen"    # Not set (assumed clear)
+    }
+    category_labels = {
+        0: "0 - Clear",
+        1: "1 - Cloudy",
+        2: "2 - Mixed",
+        3: "3 - Not set (assumed clear)"
+    }
+
+    cloud_cmap = mcolors.ListedColormap([category_colors[k] for k in category_colors])
+    bounds = [-0.5, 0.5, 1.5, 2.5, 3.5]
+    norm = mcolors.BoundaryNorm(bounds, cloud_cmap.N)
+
+    fig, ax = plt.subplots(figsize=(10, 10))
+    mesh_grid.plot(
+        column="cloud_category",
+        cmap=cloud_cmap,
+        norm=norm,
+        linewidth=0.2,
+        edgecolor="white",
+        ax=ax
+    )
+
+    legend_elements = [
+        Patch(facecolor=category_colors[k], edgecolor='black', label=category_labels[k])
+        for k in sorted(category_colors)
+    ]
+    
+    ax.legend(handles=legend_elements, title="Cloud Category", loc="lower left")
+    ax.set_title(title, fontsize=12)
+    ax.axis("off")
