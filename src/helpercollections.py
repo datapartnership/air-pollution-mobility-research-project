@@ -191,6 +191,7 @@ def load_gpkgs(data_folder: Path) -> List[gpd.GeoDataFrame]:
     return gdfs
 
 
+
 import geopandas as gpd
 import pandas as pd
 import fiona
@@ -220,6 +221,7 @@ def fill_tci_to_gpkg(
     df2 = pd.read_csv(tci_csv_folder / 'tci_baghdad_2024.csv')
     df = pd.concat([df1, df2], axis=1)
     df = df.loc[:, ~df.columns.duplicated()]  # Remove duplicate columns
+    df = df.fillna(0)  # Set NA to 0
 
     # Complete full date range from 2023-01-01 to 2024-12-31
     non_date_cols = ["geom_id", "geometry"]
@@ -231,7 +233,7 @@ def fill_tci_to_gpkg(
     # Add missing date columns with NaN
     missing_dates = sorted(set(full_date_strs) - set(date_cols))
     for missing in missing_dates:
-        df[missing] = pd.NA
+        df[missing] = 0.0
 
     # Reorder columns: non-date columns first, then sorted dates
     ordered_columns = non_date_cols + sorted(full_date_strs)
@@ -253,7 +255,7 @@ def fill_tci_to_gpkg(
                 continue
 
             # Inject TCI value for that specific date
-            gdf["TCI"] = df[date_str].values  # Ensure row count matches
+            gdf["TCI"] = df[date_str].values  # Ensure row count matches 
 
             output_file = output_folder / f"{output_name}.gpkg"
             gdf.to_file(output_file, layer=layer_name, driver="GPKG")
