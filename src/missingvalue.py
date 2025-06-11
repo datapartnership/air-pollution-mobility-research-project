@@ -285,3 +285,77 @@ def fill_surface_temperature_data(
         output_file = output_dir / f"{city}_LST_{date}_filled.tif"
         with rasterio.open(output_file, 'w', **profile) as dst:
             dst.write(filled_band.astype(profile['dtype']), 1)
+
+from pathlib import Path
+import numpy as np
+import rasterio
+from scipy.ndimage import generic_filter
+from scipy.stats import mode
+
+def fill_nan_with_mode(window: np.ndarray) -> float:
+    """
+    Replace the center pixel with the mode of its neighbors if it is NaN.
+    """
+    center = window[len(window) // 2]
+    if not np.isnan(center):
+        return center
+    neighbors = window[~np.isnan(window)].astype(int)
+    return mode(neighbors, keepdims=False).mode[0] if len(neighbors) > 0 else np.nan
+
+def iterative_fill_categorical(data: np.ndarray, max_iter: int = 10, window_size: int = 9) -> np.ndarray:
+    """
+    Iteratively fill NaN in a categorical raster using neighborhood mode.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        2D array with NaN values.
+    max_iter : int
+        Maximum number of iterations.
+    window_size : int
+        Size of the neighborhood window (must be odd).
+    """
+    filled = data.copy()
+    for _ in range(max_iter):
+        previous_nan = np.isnan(filled).sum()
+        filled = generic_filter(filled, function=fill_nan_with_mode, size=window_size, mode='nearest')
+        if np.isnan(filled).sum() == 0 or np.isnan(filled).sum() == previous_nan:
+            break
+    return filled
+
+def fill_landcover_data(
+    input_tiff_path: Path,
+    output_tiff_path: Path,
+    default_nodata: int = 255
+) -> None:
+    """
+    Fill missing values in a land cover GeoTIFF using neighborhood mode.
+
+    Parameters
+    ----------
+    input_tiff_path : Path
+        Path to the input GeoTIFF file.
+    output_tiff_path : Path
+        Path to save the filled GeoTIFF.
+    default_nodata : int
+        Value used to represent nodata in the raster.
+    """
+    with rasterio.open(input_tiff_path) as src:
+        band = src.read(1).astype(float)
+        profile = src.profile
+        nodata_val = src.nodata if src.nodata is not None else default_nodata
+
+    band[band == nodata_val] = np.nan
+
+    # Apply iterative mode-based filling
+    filled_band = iterative_fill_categorical(band)
+
+    # Replace any remaining NaN with global mode
+    valid_values = filled_band[~np.isnan(filled_band)].astype(int)
+    global_mode = mode(valid_values, keepdims=False).mode[0]
+    filled_band = np.where(np.isnan(filled_band), global_mode, filled_band)
+
+    # Write back to file
+    profile.update(nodata=nodata_val)
+    with rasterio.open(output_tiff_path, 'w', **profile) as dst:
+        dst.write(filled_band.astype(profile["dtype"]), 1)
