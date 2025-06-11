@@ -350,11 +350,8 @@ def fill_landcover_data(
     # Safe mode fallback
     try:
         mode_result = mode(valid_values, keepdims=False)
-        if hasattr(mode_result.mode, '__len__') and len(mode_result.mode) > 0:
-            candidate = mode_result.mode[0]
-            global_mode = candidate if candidate not in [0, 255] else 13
-        else:
-            global_mode = 13
+        candidate = np.atleast_1d(mode_result.mode)[0]
+        global_mode = candidate if candidate not in [0, 255] else 13
     except Exception:
         global_mode = 13
 
