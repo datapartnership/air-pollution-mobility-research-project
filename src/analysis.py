@@ -228,3 +228,32 @@ def compute_plot_local_moran(
         plt.show()
 
     # return gdf_result
+
+import matplotlib.pyplot as plt
+
+def plot_xgb_training_curve(evals_result):
+    plt.plot(evals_result['train']['rmse'], label='Train RMSE')
+    plt.plot(evals_result['eval']['rmse'], label='Eval RMSE')
+    plt.xlabel('Iteration')
+    plt.ylabel('RMSE (scaled)')
+    plt.title('XGBoost Training Progress')
+    plt.legend()
+    plt.show()
+
+
+def plot_xgb_feature_importance(model, features, importance_type:str = 'weight'):
+
+    importance_dict = model.get_score(importance_type=importance_type)  # default: weight
+    importances = [(feat, importance_dict.get(feat, 0)) for feat in features]
+    importances.sort(key=lambda x: x[1], reverse=True)
+
+    print("Feature Importances:")
+    for feat, score in importances:
+        print(f"{feat}: {score}")
+
+    plt.figure(figsize=(10, 6))
+    plt.barh([i[0] for i in importances][::-1], [i[1] for i in importances][::-1])
+    plt.xlabel("Feature Importance (weight)")
+    plt.title("XGBoost Feature Importance")
+    plt.tight_layout()
+    plt.show()

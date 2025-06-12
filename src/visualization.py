@@ -633,71 +633,60 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
-def plot_feature_correlation_heatmap(
-        data_folder: Path,
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+from pathlib import Path
+from typing import List
+from pandas import DataFrame
+
+def plot_corr_matrix(
+        df: DataFrame, 
+        cols_of_interest: List[str], 
         output_path: Path, 
         plot_name: str,
-):
+): 
     """
-    Generate and save a Pearson correlation heatmap from multiple GPKG files.
+    Generate and save a Pearson correlation heatmap for selected features.
 
-    This function reads all GPKG files in the specified folder, merges them into a 
-    single GeoDataFrame, extracts numeric features, drops rows with missing values,
-    computes the Pearson correlation matrix, and saves the resulting heatmap as an image.
+    This function takes a DataFrame, selects the specified columns of interest, computes 
+    the Pearson correlation matrix, and saves a heatmap visualization to the given path.
 
     Parameters
     ----------
-    data_folder : Path
-        Path to the folder containing .gpkg files.
+    df : DataFrame
+        The input DataFrame containing the features.
+    cols_of_interest : List[str]
+        List of column names to include in the correlation analysis.
     output_path : Path
-        Directory where the heatmap image will be saved.
+        Path to the directory where the heatmap image will be saved.
     plot_name : str
-        Name of the output heatmap image file (without extension or path).
+        Name of the output heatmap image file (without file extension).
+
+    Returns
+    -------
+    None
 
     Example
     -------
     >>> from pathlib import Path
-    >>> data_folder = Path("/path/to/addis-mesh-data")
-    >>> output_path = Path("./outputs")
-    >>> plot_feature_correlation_heatmap(data_folder, output_path, "correlation_heatmap")
+    >>> plot_corr_matrix(df, cols_of_interest, Path("./outputs"), "addis_corr_heatmap")
     """
-    
-    # Concatenate into a single GeoDataFrame
-    gpkg_files = sorted(data_folder.glob('*.gpkg'))
-
-    gdfs = []
-    for file in tqdm(gpkg_files, desc="Reading GPKG files"):
-        try:
-            gdf = gpd.read_file(file)
-            gdfs.append(gdf)
-        except Exception as e:
-            print(f"Failed to read {file}, error: {e}")
-
-    merged_gdf = pd.concat(gdfs, ignore_index=True)
-    numeric_df = merged_gdf.select_dtypes(include='number')
-
-    # Drop rows with any missing values and report how many were removed
-    total_rows = numeric_df.shape[0]
-    rows_with_na = numeric_df.isna().any(axis=1).sum()
-    percent_dropped = (rows_with_na / total_rows) * 100
-    print(f"Dropped {rows_with_na} rows ({percent_dropped:.2f}%) due to missing values")
-
-    numeric_df = numeric_df.dropna(axis=0, how='any')
-    
-    # Alternative: fill missing values with column means
-    # numeric_df = numeric_df.fillna(numeric_df.mean())
+    # Select relevant columns and drop rows with missing values
+    df_subset = df[cols_of_interest].dropna()
 
     # Compute Pearson correlation matrix
-    corr_matrix = numeric_df.corr(method='pearson')
+    corr_matrix = df_subset.corr()
 
-    # Visualize as heatmap
-    plt.figure(figsize=(14, 12))
+    # Plot and save heatmap
+    plt.figure(figsize=(15, 12))
     sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap="coolwarm", square=True)
-    plt.title(plot_name)
+    plt.title(plot_name, fontsize=16)
     plt.tight_layout()
     plt.savefig(output_path / f'{plot_name}.png', dpi=300)
     plt.show()
-    print(f"Heatmap saved to {output_path}")
+
+    print(f"Heatmap saved to {output_path / f'{plot_name}.png'}")
 
 
 import matplotlib.pyplot as plt
