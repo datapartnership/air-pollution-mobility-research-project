@@ -873,7 +873,7 @@ def tiff_2_gif_cloud(
     gif_path = output_dir / f"{output_name}.gif"
 
     anim.save(gif_path, writer=PillowWriter(fps=fps))
-    plt.close(fig)
+    plt.show(fig)
 
     print(f"GIF saved to: {gif_path}")
 
@@ -926,3 +926,100 @@ def plot_cloud_category(mesh_grid_path, title):
     ax.legend(handles=legend_elements, title="Cloud Category", loc="lower left")
     ax.set_title(title, fontsize=12)
     ax.axis("off")
+    
+
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+from matplotlib.patches import Patch
+from typing import Optional, Dict, Tuple
+
+def plot_cloud_category_raster(
+    arr: np.ndarray,
+    title: str = "Cloud Category Map",
+    category_colors: Optional[Dict[int, str]] = None,
+    category_labels: Optional[Dict[int, str]] = None,
+    ax: Optional[plt.Axes] = None,
+    nodata_value: Optional[int] = None,
+    legend: bool = True,
+    legend_kwargs: Optional[dict] = None,
+    imshow_kwargs: Optional[dict] = None,
+) -> Tuple[plt.Axes, Optional[plt.Axes]]:
+    """
+    Display a discrete raster map (e.g., cloud categories) with fixed colors per class.
+    Automatically masks nodata and sets white background for cleaner visualization.
+
+    Parameters
+    ----------
+    arr : np.ndarray
+        2D array of integer class labels.
+    title : str
+        Plot title.
+    category_colors : dict[int, str], optional
+        Mapping from class ID to color.
+    category_labels : dict[int, str], optional
+        Mapping from class ID to legend label.
+    ax : plt.Axes, optional
+        Matplotlib axis to draw on.
+    nodata_value : int or float, optional
+        Value to treat as nodata and mask out.
+    legend : bool
+        Whether to show legend.
+    legend_kwargs : dict, optional
+        Extra kwargs for ax.legend().
+    imshow_kwargs : dict, optional
+        Extra kwargs for imshow.
+
+    Returns
+    -------
+    ax : plt.Axes
+        The axes used for plotting.
+    legend_ax : plt.Axes or None
+        The legend, if created.
+    """
+
+    # === Handle category defaults ===
+    if category_colors is None:
+        category_colors = {
+            0: "skyblue",     # Clear
+            1: "gray",        # Cloudy
+            2: "orange",      # Mixed
+            3: "lightgreen"   # Not set
+        }
+    if category_labels is None:
+        category_labels = {
+            0: "0 - Clear",
+            1: "1 - Cloudy",
+            2: "2 - Mixed",
+            3: "3 - Not set"
+        }
+
+    sorted_keys = sorted(category_colors.keys())
+    cmap = mcolors.ListedColormap([category_colors[k] for k in sorted_keys])
+    bounds = [k - 0.5 for k in sorted_keys] + [sorted_keys[-1] + 0.5]
+    norm = mcolors.BoundaryNorm(bounds, cmap.N)
+
+    # === Mask nodata ===
+    if nodata_value is not None:
+        arr = np.ma.masked_where(arr == nodata_value, arr)
+    elif np.issubdtype(arr.dtype, np.floating):
+        arr = np.ma.masked_invalid(arr)
+
+    # === Create figure and axis ===
+    if ax is None:
+        _, ax = plt.subplots(figsize=(6, 6))
+
+    imshow_kwargs = imshow_kwargs or {}
+    cmap.set_bad(color="white")  # Set background to white
+    img = ax.imshow(arr, cmap=cmap, norm=norm, **imshow_kwargs)
+
+    ax.set_title(title)
+    ax.axis("off")
+
+    legend_ax = None
+    if legend:
+        legend_kwargs = legend_kwargs or {}
+        handles = [Patch(color=category_colors[k], label=category_labels[k]) for k in sorted_keys]
+        ax.legend(handles=handles, loc="lower right", **legend_kwargs)
+
+    return ax, legend_ax
