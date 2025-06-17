@@ -101,3 +101,6 @@ data/*
 # demo-data as an exception
 !data/demo-data/
 !data/demo-data/**
+
+# ignore raw figures
+figures/*
