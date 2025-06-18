@@ -87,9 +87,7 @@ import geopandas as gpd
 from typing import List
 pd.set_option('future.no_silent_downcasting', True)
 
-def average_mesh_over_time(
-        gdfs: List[gpd.GeoDataFrame]
-) -> gpd.GeoDataFrame:
+def average_mesh_over_time(gdfs: List[gpd.GeoDataFrame]) -> gpd.GeoDataFrame:
     """
     Calculate the temporal average of numerical features from a list of GeoDataFrames (meshes).
     
@@ -110,30 +108,31 @@ def average_mesh_over_time(
     >>> mean_mesh = average_mesh_over_time(gdfs)
     """
 
-    # Get numeric columns, excluding 'geom_id' if present
     numeric_cols = gdfs[0].select_dtypes(include=[np.number]).columns.tolist()
     if "geom_id" in numeric_cols:
         numeric_cols.remove("geom_id")
-    
+
     cleaned_arrays = []
     for gdf in gdfs:
-        # Replace None with np.nan to handle missing values
-        temp_df = gdf[numeric_cols].replace({None: np.nan}).copy()
-        # Infer proper data types to avoid future warnings
-        temp_df = temp_df.infer_objects(copy=False)
-        cleaned_arrays.append(temp_df.values)
+        # select only the valid columns
+        valid_cols = [col for col in numeric_cols if col in gdf.columns]
+        
+        temp_data = pd.DataFrame(columns=numeric_cols)
+        for col in numeric_cols:
+            if col in gdf.columns:
+                temp_data[col] = gdf[col]
+            else:
+                temp_data[col] = np.nan
+        
+        temp_data = temp_data.replace({None: np.nan}).infer_objects(copy=False)
+        cleaned_arrays.append(temp_data.values)
     
-    # Convert list of arrays to 3D numpy array: (time, n_cells, n_features)
     data_matrix = np.array(cleaned_arrays)
-    
-    # Compute mean along time axis, ignoring NaNs
     mean_data = np.nanmean(data_matrix, axis=0)
-    
-    # Construct a new GeoDataFrame using geometry and geom_id from first gdf
+
     mean_gdf = gdfs[0][["geom_id", "geometry"]].copy()
-    # Assign averaged numeric features
     mean_gdf[numeric_cols] = mean_data
-    
+
     return mean_gdf
 
 
@@ -143,6 +142,7 @@ from esda import Moran_Local
 import matplotlib.pyplot as plt
 import geopandas as gpd
 from pathlib import Path
+from typing import Optional
 
 def compute_plot_local_moran(
     gdf: gpd.GeoDataFrame,
@@ -154,7 +154,9 @@ def compute_plot_local_moran(
     if_emphasize: bool = True,
     cmap: str = "hot_r",
     figsize: tuple = (10, 8),
-    show_plot: bool = True
+    show_plot: bool = True,
+    ax: Optional[plt.Axes] = None,
+    **plot_kwargs
 ) -> gpd.GeoDataFrame:
     """
     Compute Local Moran's I statistic for a numeric feature in a GeoDataFrame and visualize it.
@@ -210,8 +212,10 @@ def compute_plot_local_moran(
         plot_title = f"Local Moran's I ({feature_col})"
 
     # Create plot
-    fig, ax = plt.subplots(1, 1, figsize=figsize)
-    gdf_result.plot(column="local_I", cmap=cmap, legend=True, ax=ax)
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=figsize)
+    
+    gdf_result.plot(column="local_I", cmap=cmap, legend=True, ax=ax, **plot_kwargs)
 
     # Outline statistically significant areas
     if if_emphasize:
