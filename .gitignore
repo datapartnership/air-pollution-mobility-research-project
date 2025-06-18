@@ -90,6 +90,17 @@ _build/
 
 # python-dotenv
 .env
+.conda
 
 # setuptools-scm/
 src/*/_version.py
+
+# ignore raw data
+data/*
+
+# demo-data as an exception
+!data/demo-data/
+!data/demo-data/**
+
+# ignore raw figures
+figures/*
