@@ -387,3 +387,34 @@ def clip_cloud_tiff_by_bbox(city, data_tiff_path, output_path,
 
     print(f"All clipped TIFF files saved to {output_dir}")
     return output_dir
+
+import pandas as pd
+from typing import List
+
+import ee
+ee.Authenticate() # For the first Initialization, individual API is needed to log into Google Earth Engine
+ee.Initialize()
+
+# Function: generate desired time period of NO2 data  
+def specific_date(start_date: str, end_date: str, time_resolution: str = 'D') -> List[str]:
+    """
+    Generate a list of dates within specified time period and resolution.
+
+    Parameters:
+    - start_date: str
+        Start date, format: 'YYYY-MM-DD'.
+    - end_date: str
+        End date, format: 'YYYY-MM-DD'.
+    - time_resolution: str
+        Time resolution (e.g., 'D' for daily, 'W' for weekly, 'M' for monthly). Default is 'D'.
+    
+    Return:
+    - dates(list): List of date strings marking the ends of each time segment, format: 'YYYY-MM-DD'.
+    
+    """
+    dates = (
+        pd.date_range(start_date, end_date, freq = time_resolution)
+        .strftime('%Y-%m-%d')
+        .tolist()
+    )
+    return dates
