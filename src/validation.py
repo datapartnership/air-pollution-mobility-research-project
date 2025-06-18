@@ -26,13 +26,12 @@ CITY_CONFIG = {
     }
 }
 
-# Column definitions
-ESA_CATEGORIES = [
-    "tree_cover_a", "shrubland_a", "grassland_a", "sparse_veg_a",
-    "snow_a", "water_bod_a", "wetland_a", "mangroves_a",
-    "moss_a", "unclassified_a"
-]
 BUILT_UP_COL = "built_up_a"
+ESA_CATEGORIES = [
+  "tree_cover_a", "shrubland_a", "grassland_a", "sparse_veg_a",
+  "snow_a", "water_bod_a", "wetland_a", "mangroves_a",
+  "moss_a", "unclassified_a",
+]
 OSM_BLD_COLS = [
     "lu_commercial_area", "lu_industrial_area", "lu_residential_area"
 ]
