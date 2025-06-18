@@ -170,17 +170,42 @@ def clip_tiff_by_bbox(city, data_tiff_path, output_path,
     return output_dir
 
 from pathlib import Path
+from typing import List, Union
+import geopandas as gpd
 from tqdm import tqdm
-from typing import List
 
-def load_gpkgs(data_folder: Path) -> List[gpd.GeoDataFrame]:
-    """"
-    Read all the gpkg into one list, each element being one mesh, GeoDataFrame.
+def load_gpkgs(
+    data_folder: Path, 
+    dates: Union[List[str], None] = None,  
+    date_format: str = "%Y-%m-%d"
+) -> List[gpd.GeoDataFrame]:
+    """
+    Read all GPKG files matching given dates into a list of GeoDataFrames.
 
-    Usage:
-    >>> load_gpkgs(DATA_PATH / "addis-mesh-data")
+    Parameters
+    ----------
+    data_folder : Path
+        Folder containing the .gpkg files.
+    dates : list of str or None
+        List of date strings to filter filenames. If None, loads all files.
+    date_format : str
+        Date format pattern to parse date strings if needed (currently unused, for future use).
+
+    Usage
+    -----
+    >>> load_gpkgs(DATA_PATH / "addis-mesh-data", dates=['2023-05-01', '2023-05-02'])
     """
     gpkg_files = sorted(data_folder.glob('*.gpkg'))
+
+    if dates is not None:
+        
+        filtered_files = []
+        for f in gpkg_files:
+            fname = f.stem
+            if any(date_str in fname for date_str in dates):
+                filtered_files.append(f)
+        gpkg_files = filtered_files
+
     gdfs = []
     for file in tqdm(gpkg_files, desc="Reading GPKG files"):
         try:
@@ -190,12 +215,6 @@ def load_gpkgs(data_folder: Path) -> List[gpd.GeoDataFrame]:
             print(f"Failed to read {file}, error: {e}")
     return gdfs
 
-
-
-import geopandas as gpd
-import pandas as pd
-import fiona
-from pathlib import Path
 
 def fill_tci_to_gpkg(
         gpkg_folder: Path, 
@@ -388,12 +407,134 @@ def clip_cloud_tiff_by_bbox(city, data_tiff_path, output_path,
     print(f"All clipped TIFF files saved to {output_dir}")
     return output_dir
 
+def clip_tiff_temp_by_bbox(city, data_tiff_path, output_path,
+                    min_lon, min_lat, max_lon, max_lat):
+    """
+    Clip all GeoTIFF files in a folder by a bounding box,
+    and save clipped rasters to a new folder.
+
+    Parameters:
+    - city (str): City name used to name output folder
+    - data_tiff_path (Path): Folder containing input GeoTIFF files
+    - output_path (Path): Folder to save clipped GeoTIFF files
+    - min_lon, min_lat, max_lon, max_lat (float): bounding box coords
+
+    Returns:
+    - output_dir (Path): Path of folder containing clipped TIFFs
+    """
+    if not isinstance(data_tiff_path, Path):
+        data_tiff_path = Path(data_tiff_path)
+    if not isinstance(output_path, Path):
+        output_path = Path(output_path)
+
+    tiff_files = sorted(data_tiff_path.glob("*.tif"))
+    n_task = len(tiff_files)
+
+    output_dir = output_path / f"{city}-temp-clipped"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    bbox = box(min_lon, min_lat, max_lon, max_lat)
+    geo = [mapping(bbox)]
+
+    for index, tiff_path in enumerate(tiff_files):
+        print(f"Processing {index + 1}/{n_task}: {tiff_path.name}")
+
+        with rasterio.open(tiff_path) as src:
+            out_image, out_transform = mask(src, geo, crop=True)
+            out_meta = src.meta.copy()
+
+        out_meta.update({
+            "driver": "GTiff",
+            "height": out_image.shape[1],
+            "width": out_image.shape[2],
+            "transform": out_transform
+        })
+
+        output_tiff_path = output_dir / tiff_path.name
+
+        with rasterio.open(output_tiff_path, "w", **out_meta) as dest:
+            dest.write(out_image)
+
+    print(f"All clipped TIFF files saved to {output_dir}")
+    return output_dir
+
+def clip_tiff_temp_by_bbox(city, data_tiff_path, output_path,
+                    min_lon, min_lat, max_lon, max_lat):
+    """
+    Clip all GeoTIFF files in a folder by a bounding box,
+    and save clipped rasters to a new folder.
+
+    Parameters:
+    - city (str): City name used to name output folder
+    - data_tiff_path (Path): Folder containing input GeoTIFF files
+    - output_path (Path): Folder to save clipped GeoTIFF files
+    - min_lon, min_lat, max_lon, max_lat (float): bounding box coords
+
+    Returns:
+    - output_dir (Path): Path of folder containing clipped TIFFs
+    """
+    if not isinstance(data_tiff_path, Path):
+        data_tiff_path = Path(data_tiff_path)
+    if not isinstance(output_path, Path):
+        output_path = Path(output_path)
+
+    tiff_files = sorted(data_tiff_path.glob("*.tif"))
+    n_task = len(tiff_files)
+
+    output_dir = output_path / f"{city}-temp-clipped"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    bbox = box(min_lon, min_lat, max_lon, max_lat)
+    geo = [mapping(bbox)]
+
+    for index, tiff_path in enumerate(tiff_files):
+        print(f"Processing {index + 1}/{n_task}: {tiff_path.name}")
+
+        with rasterio.open(tiff_path) as src:
+            out_image, out_transform = mask(src, geo, crop=True)
+            out_meta = src.meta.copy()
+
+        out_meta.update({
+            "driver": "GTiff",
+            "height": out_image.shape[1],
+            "width": out_image.shape[2],
+            "transform": out_transform
+        })
+
+        output_tiff_path = output_dir / tiff_path.name
+
+        with rasterio.open(output_tiff_path, "w", **out_meta) as dest:
+            dest.write(out_image)
+
+    print(f"All clipped TIFF files saved to {output_dir}")
+    return output_dir
+
+def specific_date(start_date: str, end_date: str, time_resolution: str = 'D') -> List[str]:
+    """
+    Generate a list of dates within specified time period and resolution.
+
+    Parameters:
+    - start_date: str
+        Start date, format: 'YYYY-MM-DD'.
+    - end_date: str
+        End date, format: 'YYYY-MM-DD'.
+    - time_resolution: str
+        Time resolution (e.g., 'D' for daily, 'W' for weekly, 'M' for monthly). Default is 'D'.
+    
+    Return:
+    - dates(list): List of date strings marking the ends of each time segment, format: 'YYYY-MM-DD'.
+    
+    """
+    dates = (
+        pd.date_range(start_date, end_date, freq = time_resolution)
+        .strftime('%Y-%m-%d')
+        .tolist()
+    )
+    return dates
+
 import pandas as pd
 from typing import List
 
-import ee
-ee.Authenticate() # For the first Initialization, individual API is needed to log into Google Earth Engine
-ee.Initialize()
 
 # Function: generate desired time period of NO2 data  
 def specific_date(start_date: str, end_date: str, time_resolution: str = 'D') -> List[str]:
