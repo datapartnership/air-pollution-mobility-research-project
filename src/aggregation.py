@@ -148,7 +148,7 @@ def aggregate_pop_data(
             print("Skipping to next file...")
             continue
 
-
+from typing import List
 def compute_mean_mesh_by_daytype(
     date_df: DataFrame,
     meshes_path: Path,
@@ -157,7 +157,9 @@ def compute_mean_mesh_by_daytype(
     output_name: str = "mean_mesh_workdays_weekends.gpkg",
     country: str = "Ethiopia",
     city: str = "addis-ababa",
-    grid_id_col: str = "geom_id"
+    grid_id_col: str = "geom_id",
+    specify_date: bool = False,
+    selected_dates: List = ["2023-01-01", "2023-01-02"],
 ) -> None:
 
     """
@@ -224,6 +226,9 @@ def compute_mean_mesh_by_daytype(
         # Skip if target feature column is missing
         if feature_col not in gdf.columns:
             continue
+
+        if specify_date and date_str not in selected_dates:
+            continue  # if specify date is true, check if the date is within the dates
 
         # Keep only required columns
         gdf = gdf[[grid_id_col, feature_col, "geometry"]]
