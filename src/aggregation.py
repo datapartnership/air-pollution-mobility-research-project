@@ -446,22 +446,59 @@ def aggregate_landcover_area_to_mesh(
     mesh.to_file(mesh_path, layer=output_layer, driver="GPKG")
     print(f"Land cover area written to layer: {output_layer}")
 
-def aggregate_landcover_to_mesh(mesh_path, filled_raster, output_layer, column_name, nodata_value):
+def aggregate_landcover_to_mesh(
+    mesh_path: Union[str, Path],
+    filled_raster: Union[str, Path],
+    output_layer: str,
+    column_name: str,
+    nodata_value: int = 255,
+    layer_name: str = None
+) -> None:
+    """
+    Aggregate land cover raster to mesh using majority value per polygon.
+
+    Parameters
+    ----------
+    mesh_path : str or Path
+        Path to the mesh GPKG file.
+    filled_raster : str or Path
+        Path to the filled raster (land cover classification).
+    output_layer : str
+        Name of the output layer to save results into.
+    column_name : str
+        Name of the output column in the GeoDataFrame.
+    nodata_value : int
+        Raster nodata value to ignore during aggregation.
+    layer_name : str, optional
+        If provided, use this layer from the GPKG file instead of default.
+    """
     import rasterstats
     import geopandas as gpd
     import numpy as np
 
+    # Load mesh as GeoDataFrame
+    if layer_name:
+        mesh_gdf = gpd.read_file(mesh_path, layer=layer_name)
+    else:
+        mesh_gdf = mesh_path  # assume file path for zonal_stats
+
+    # Compute zonal stats
     stats = rasterstats.zonal_stats(
-        mesh_path,
+        mesh_gdf,
         filled_raster,
         stats="majority",
         geojson_out=True,
         nodata=nodata_value
     )
+
     gdf = gpd.GeoDataFrame.from_features(stats)
     gdf = gdf.rename(columns={"majority": column_name})
-    gdf = gdf[[column_name, "geometry"]]
+    gdf = gdf[gdf.geometry.notnull()]
+
+    # Save to GPKG
     gdf.to_file(mesh_path, layer=output_layer, driver="GPKG")
+    print(f"[Saved] {output_layer} written to: {mesh_path}")
+
 
 
 def batch_aggregate_LST(tiff_folder, mesh_folder, batch_size=50):
