@@ -559,3 +559,12 @@ def specific_date(start_date: str, end_date: str, time_resolution: str = 'D') ->
         .tolist()
     )
     return dates
+
+
+import geopandas as gpd
+def gpkg_2_shp(gpkg_root, shp_name):
+    """
+    Change gpkg file to shp file to assist ArcGIS visualization
+    """
+    gdf = gpd.read_file(gpkg_root)
+    gdf.to_file(gpkg_root / shp_name, driver="ESRI Shapefile")
