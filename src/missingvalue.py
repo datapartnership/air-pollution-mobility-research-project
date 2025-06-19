@@ -98,7 +98,8 @@ def iterative_fill(
 def fill_missing_data(
     country: str,
     data_tiff_path: Path,
-    output_path: Path
+    output_path: Path,
+    feature: str = "NO2"
 ) -> None:
     """
     Fill missing (nodata) values in all TIFF files in a given directory and
@@ -123,7 +124,7 @@ def fill_missing_data(
     n_task = len(tiff_files)
 
     # Define output directory and create it if not exist
-    output_dir = output_path / f"{country}-no2-filled"
+    output_dir = output_path / f"{country}-{feature}-filled"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for index, tiff_path in enumerate(tiff_files):
@@ -141,7 +142,7 @@ def fill_missing_data(
 
         band_filled = iterative_fill(band, max_iter=10, window_size=9)
 
-        output_file = output_dir / f"{country}_NO2_{date}_filled.tif"
+        output_file = output_dir / f"{country}_{feature}_{date}_filled.tif"
         with rasterio.open(output_file, 'w', **profile) as dst:
             filled_band = np.where(np.isnan(band_filled), nodata_value, band_filled)
             dst.write(filled_band.astype(profile['dtype']), 1)
@@ -400,3 +401,116 @@ def fill_cloud_missing_data(
         with rasterio.open(output_file, 'w', **profile) as dst:
             filled_band = np.where(np.isnan(band_filled), nodata_value, band_filled)
             dst.write(filled_band.astype(profile['dtype']), 1)
+
+import os
+from pathlib import Path
+import rasterio
+from rasterio.enums import Resampling
+import numpy as np
+from scipy.ndimage import generic_filter
+
+def fill_surface_temperature_data(
+    city: str,
+    data_tiff_path: Path,
+    output_path: Path
+) -> None:
+    """
+    Fill missing surface temperature data in TIFFs using 3x3 mean filter.
+
+    Parameters
+    ----------
+    city : str
+        Name of the city (used for naming output files).
+    data_tiff_path : Path
+        Path to folder containing raw TIFF files.
+    output_path : Path
+        Folder to save filled TIFF files.
+    """
+    output_folder = output_path / f"{city}-LST-filled"
+    output_folder.mkdir(parents=True, exist_ok=True)
+
+    for tif in sorted(os.listdir(data_tiff_path)):
+        if not tif.endswith(".tif"):
+            continue
+
+        in_path = data_tiff_path / tif
+
+        with rasterio.open(in_path) as src:
+            arr = src.read(1).astype(float)
+            nodata = src.nodata
+
+            if nodata is None:
+                nodata = -9999  # default fallback
+                print(f"Warning: {tif} has no nodata, using {nodata}")
+
+            arr[arr == nodata] = np.nan
+
+            def mode_filter(vals):
+                if np.all(np.isnan(vals)):
+                    return nodata
+                return np.nanmean(vals)
+
+            filled = generic_filter(arr, mode_filter, size=3, mode='constant', cval=np.nan)
+
+            out_meta = src.meta.copy()
+            out_meta.update({"nodata": nodata})
+
+        out_path = output_folder / (tif.replace(".tif", "_filled.tif"))
+
+        with rasterio.open(out_path, 'w', **out_meta) as dst:
+            dst.write(np.where(np.isnan(filled), nodata, filled).astype(out_meta['dtype']), 1)
+
+        print(f"Filled: {out_path.name}")
+
+
+
+import rasterio
+import numpy as np
+from scipy import stats
+from rasterio.windows import Window
+from rasterio.enums import Resampling
+from rasterio.transform import Affine
+
+def fill_landcover_data(input_tiff_path, output_tiff_path, default_nodata=255, block_size=512):
+    """
+    Fill nodata areas in a categorical raster using majority filtering from neighboring valid pixels.
+
+    Parameters
+    ----------
+    input_tiff_path : str or Path
+        Path to the input raster file with categorical values.
+    output_tiff_path : str or Path
+        Path to save the filled raster.
+    default_nodata : int
+        The nodata value used in the input raster.
+    block_size : int
+        Size of the sliding window to apply mode filtering.
+    """
+    with rasterio.open(input_tiff_path) as src:
+        profile = src.profile
+        profile.update(dtype=rasterio.uint8, nodata=default_nodata)
+        data = src.read(1)
+
+    # Prepare output array
+    filled = data.copy()
+
+    # Identify where nodata exists
+    mask_nodata = (data == default_nodata)
+
+    # Iterate over blocks and apply mode filtering
+    rows, cols = data.shape
+    for i in range(0, rows, block_size):
+        for j in range(0, cols, block_size):
+            win = (slice(i, min(i + block_size, rows)), slice(j, min(j + block_size, cols)))
+            block = data[win]
+
+            if np.any(block == default_nodata):
+                valid_pixels = block[block != default_nodata]
+                if valid_pixels.size > 0:
+                    mode_value = stats.mode(valid_pixels, axis=None, keepdims=False).mode
+                    block[(block == default_nodata)] = mode_value
+                    filled[win] = block
+
+    # Save filled raster
+    with rasterio.open(output_tiff_path, "w", **profile) as dst:
+        dst.write(filled, 1)

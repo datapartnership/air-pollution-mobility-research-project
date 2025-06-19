@@ -559,3 +559,145 @@ def specific_date(start_date: str, end_date: str, time_resolution: str = 'D') ->
         .tolist()
     )
     return dates
+
+def clip_raster_with_shapefile_vrt(input_tiff_list, shapefile, output_tiff, nodata_value=255):
+    """
+    Merge multiple TIFFs into a VRT and clip it using shapefile boundary
+    """
+    from rasterio.merge import merge
+    import rasterio
+    from rasterio.mask import mask
+    import geopandas as gpd
+
+    src_files_to_mosaic = [rasterio.open(str(tif)) for tif in input_tiff_list]
+    mosaic, transform = merge(src_files_to_mosaic)
+    meta = src_files_to_mosaic[0].meta.copy()
+    meta.update({
+        "driver": "GTiff",
+        "height": mosaic.shape[1],
+        "width": mosaic.shape[2],
+        "transform": transform,
+        "nodata": nodata_value
+    })
+
+    shapes = gpd.read_file(shapefile)
+    geometry = [shapes.geometry.iloc[0].__geo_interface__]
+
+    with rasterio.open(output_tiff, "w", **meta) as dst:
+        dst.write(mosaic)
+
+    with rasterio.open(output_tiff) as src:
+        out_image, out_transform = mask(src, geometry, crop=True, nodata=nodata_value)
+        out_meta = src.meta.copy()
+        out_meta.update({
+            "height": out_image.shape[1],
+            "width": out_image.shape[2],
+            "transform": out_transform,
+            "nodata": nodata_value
+        })
+
+    with rasterio.open(output_tiff, "w", **out_meta) as dest:
+        dest.write(out_image)
+
+def revert_tiff_filenames_to_match_mesh(folder_path):
+    import os
+    import re
+
+    for file in os.listdir(folder_path):
+        if file.endswith("_filled.tif"):
+            new_name = re.sub(r".*_(\d{4}_\d{2}_\d{2})_filled.tif", r"addis-ababa_LST_\1_filled.tif", file)
+            os.rename(folder_path / file, folder_path / new_name)
+
+import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap, BoundaryNorm
+import numpy as np
+
+def get_esa_landcover_colormap():
+    """
+    Returns ESA WorldCover 2021 class values, names, colormap, and normalization object.
+
+    Returns
+    -------
+    class_values : list of int
+        ESA land cover class values.
+    class_names : list of str
+        Human-readable names for each class.
+    cmap : ListedColormap
+        Colormap object for visualization.
+    norm : BoundaryNorm
+        Normalization object matching class values to color bins.
+    """
+
+    class_values = [
+        10, 20, 30, 40, 50, 60, 70, 80,
+        90, 95, 100, 111, 112, 113
+    ]
+
+    class_names = [
+        "Tree cover", "Shrubland", "Grassland", "Cropland",
+        "Built-up", "Bare/sparse vegetation", "Snow and ice", "Water bodies",
+        "Wetlands", "Mangroves", "Moss and lichen", "Permanent snow", "Glaciers", "Others"
+    ]
+
+    class_colors = [
+        "#006400",  # 10 Tree cover (dark green)
+        "#ffbb22",  # 20 Shrubland (light brown)
+        "#ffff4c",  # 30 Grassland (yellow)
+        "#f096ff",  # 40 Cropland (pink)
+        "#fa0000",  # 50 Built-up (red)
+        "#b4b4b4",  # 60 Sparse vegetation (gray)
+        "#f0f0f0",  # 70 Snow and ice (white)
+        "#0064c8",  # 80 Water bodies (blue)
+        "#0096a0",  # 90 Wetlands (teal)
+        "#00cf75",  # 95 Mangroves (greenish)
+        "#fae6a0",  # 100 Moss and lichen (beige)
+        "#dcdcdc",  # 111 Permanent snow (light gray)
+        "#b0e0e6",  # 112 Glaciers (pale blue)
+        "#a0a0a0",  # 113 Others/unclassified
+    ]
+
+    cmap = ListedColormap(class_colors)
+    norm = BoundaryNorm(class_values + [114], cmap.N)
+
+    return class_values, class_names, cmap, norm
+
+import rasterio
+from rasterio.mask import mask
+import geopandas as gpd
+from shapely.geometry import mapping
+
+def clip_raster_with_shapefile(input_tiff, shapefile, output_tiff, nodata_value=255):
+    """
+    Clip a raster TIFF file using the geometry of a shapefile.
+
+    Parameters
+    ----------
+    input_tiff : Path
+        Path to the input raster TIFF file.
+    shapefile : Path
+        Path to the shapefile used for clipping.
+    output_tiff : Path
+        Path to save the clipped raster.
+    nodata_value : int or float, optional
+        Value to assign to nodata areas in the output raster. Default is 255.
+    """
+    # Load shapefile geometry
+    shapes = gpd.read_file(shapefile)
+    geometry = [mapping(shapes.geometry.iloc[0])]
+
+    with rasterio.open(input_tiff) as src:
+        out_image, out_transform = mask(src, geometry, crop=True, nodata=nodata_value)
+        out_meta = src.meta.copy()
+
+    # Update metadata for the output raster
+    out_meta.update({
+        "driver": "GTiff",
+        "height": out_image.shape[1],
+        "width": out_image.shape[2],
+        "transform": out_transform,
+        "nodata": nodata_value
+    })
+
+    # Save clipped raster
+    with rasterio.open(output_tiff, "w", **out_meta) as dest:
+        dest.write(out_image)
