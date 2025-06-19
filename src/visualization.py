@@ -1023,3 +1023,151 @@ def plot_cloud_category_raster(
         ax.legend(handles=handles, loc="lower right", **legend_kwargs)
 
     return ax, legend_ax
+
+import matplotlib.pyplot as plt
+import rasterio
+import numpy as np
+from rasterio.mask import mask
+from shapely.geometry import mapping
+import geopandas as gpd
+from pathlib import Path
+
+def plot_filled_vs_original_raster(
+    original_tif: Path,
+    filled_tif: Path,
+    shapefile: Path,
+    output_image: Path = None
+) -> None:
+    """
+    Plot original vs filled raster clipped by a shapefile geometry and optionally save the image.
+
+    Parameters
+    ----------
+    original_tif : Path
+        Path to the original raster.
+    filled_tif : Path
+        Path to the filled raster.
+    shapefile : Path
+        Path to the shapefile used to crop the filled raster.
+    output_image : Path or None
+        If provided, save the comparison image to this path.
+    """
+    shapes = gpd.read_file(shapefile)
+    geometry = [mapping(shapes.geometry.iloc[0])]
+
+    with rasterio.open(original_tif) as src_before:
+        before = src_before.read(1).astype(float)
+        before[before == src_before.nodata] = np.nan
+
+    with rasterio.open(filled_tif) as src_after:
+        out_image, _ = mask(src_after, geometry, crop=True, nodata=np.nan)
+        after = out_image[0].astype(float)
+        after[after == src_after.nodata] = np.nan
+
+    combined = np.concatenate([before[~np.isnan(before)], after[~np.isnan(after)]])
+    vmin = np.percentile(combined, 2)
+    vmax = np.percentile(combined, 98)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+    cmap = "jet"
+
+    im1 = axes[0].imshow(before, cmap=cmap, vmin=vmin, vmax=vmax)
+    axes[0].axis("off")
+    fig.colorbar(im1, ax=axes[0], fraction=0.046, pad=0.04).set_label("Temperature")
+
+    im2 = axes[1].imshow(after, cmap=cmap, vmin=vmin, vmax=vmax)
+    axes[1].axis("off")
+    fig.colorbar(im2, ax=axes[1], fraction=0.046, pad=0.04).set_label("Temperature")
+
+    plt.tight_layout()
+
+    if output_image:
+        plt.savefig(output_image, dpi=300)
+        print(f"Saved image to: {output_image.name}")
+
+    plt.show()
+
+def generate_LST_mesh_animation(data_folder, output_gif, layer_name="LST_day", column_name="LST_day_mean", cmap="YlOrRd", dpi=100, fps=6, city_label=""):
+    import geopandas as gpd
+    import matplotlib.pyplot as plt
+    import imageio
+    import numpy as np
+    from pathlib import Path
+
+    gpkg_files = sorted(data_folder.glob("*.gpkg"))
+    all_values = []
+    valid_files = []
+    skipped = []
+
+    for file in gpkg_files:
+        try:
+            gdf = gpd.read_file(file, layer=layer_name)
+            values = gdf[column_name].replace([None], np.nan).dropna().values
+            if len(values) > 0:
+                all_values.extend(values)
+                valid_files.append(file)
+        except:
+            skipped.append(file.name)
+
+    if skipped:
+        print("Skipped files:", skipped)
+
+    vmin = np.percentile(all_values, 2)
+    vmax = np.percentile(all_values, 98)
+
+    temp_img_dir = output_gif.parent / "temp_frames"
+    temp_img_dir.mkdir(parents=True, exist_ok=True)
+    frame_paths = []
+
+    for i, file in enumerate(valid_files):
+        date_str = file.stem.split("-")[-1]
+        gdf = gpd.read_file(file, layer=layer_name)
+        gdf = gdf.replace({column_name: {None: np.nan}}).dropna(subset=[column_name])
+
+        fig, ax = plt.subplots(figsize=(6, 6))
+        gdf.plot(column=column_name, cmap=cmap, ax=ax, legend=False, vmin=vmin, vmax=vmax)
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=vmin, vmax=vmax))
+        fig.colorbar(sm, ax=ax, orientation="vertical", fraction=0.03, pad=0.01).set_label("Surface Temperature (°C)", fontsize=10)
+        ax.set_title(f"{city_label} LST on {date_str}", fontsize=12)
+        ax.axis("off")
+
+        img_path = temp_img_dir / f"frame_{i:03d}.png"
+        plt.savefig(img_path, bbox_inches='tight', dpi=dpi)
+        plt.close()
+        frame_paths.append(img_path)
+
+    with imageio.get_writer(output_gif, mode='I', duration=1/fps) as writer:
+        for img_path in frame_paths:
+            writer.append_data(imageio.v3.imread(img_path))
+
+
+def get_modis_landcover_colormap():
+    from matplotlib import colors
+    cmap = colors.ListedColormap([
+        "#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e", "#e6ab02", "#a6761d", "#666666"
+    ])
+    class_values = [0, 1, 2, 3, 4, 5, 6, 7]
+    class_names = [
+        "Water", "Evergreen Needleleaf Forest", "Evergreen Broadleaf Forest",
+        "Deciduous Needleleaf Forest", "Deciduous Broadleaf Forest", "Mixed Forest",
+        "Closed Shrublands", "Open Shrublands"
+    ]
+    norm = colors.BoundaryNorm(class_values + [max(class_values)+1], cmap.N)
+    return class_values, class_names, cmap, norm
+
+
+def plot_landcover_legend_map(tiff_path, class_values, class_names, cmap, norm, title="Land Cover"):
+    import rasterio
+    import matplotlib.pyplot as plt
+    from rasterio.plot import show
+
+    with rasterio.open(tiff_path) as src:
+        fig, ax = plt.subplots(figsize=(6, 6))
+        show(src, ax=ax, cmap=cmap, norm=norm)
+        ax.set_title(title)
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+        sm.set_array([])
+        cbar = fig.colorbar(sm, ax=ax, ticks=class_values)
+        cbar.ax.set_yticklabels(class_names)
+        plt.show()
+

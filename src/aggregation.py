@@ -384,3 +384,112 @@ def aggregate_cloud_data(
         except Exception as err:
             print(f"Processing failed: {err}")
             continue
+
+import geopandas as gpd
+from rasterstats import zonal_stats
+
+def aggregate_landcover_area_to_mesh(
+    mesh_path,
+    filled_raster,
+    output_layer="LandCover_2023",
+    pixel_area=100  # ESA pixel is 10m × 10m = 100 m²
+):
+    """
+    Aggregate land cover area (m²) for each ESA category into mesh cells.
+
+    Parameters
+    ----------
+    mesh_path : Path
+        Path to the mesh GPKG file.
+    filled_raster : Path
+        Path to the filled ESA raster (GeoTIFF).
+    output_layer : str
+        Layer name for output.
+    pixel_area : int
+        Area of a single pixel in m² (default: 100).
+    """
+    # Define ESA land cover codes and target field names
+    esa_code_to_column = {
+        10: "tree_cover_a",
+        20: "shrubland_a",
+        30: "grassland_a",
+        40: "cropland_a",
+        50: "built_up_a",
+        60: "sparse_veg_a",
+        70: "snow_a",
+        80: "water_bod_a",
+        90: "wetland_a",
+        95: "mangroves_a",
+        100: "moss_a",
+        255: "unclassified_a"
+    }
+
+    mesh = gpd.read_file(mesh_path)
+
+    stats = zonal_stats(
+        mesh,
+        filled_raster,
+        categorical=True,
+        nodata=255
+    )
+
+    # Initialize result columns with 0
+    for col in esa_code_to_column.values():
+        mesh[col] = 0
+
+    for i, stat in enumerate(stats):
+        for lc_code, count in stat.items():
+            colname = esa_code_to_column.get(lc_code)
+            if colname:
+                mesh.at[i, colname] = count * pixel_area
+
+    mesh.to_file(mesh_path, layer=output_layer, driver="GPKG")
+    print(f"Land cover area written to layer: {output_layer}")
+
+def aggregate_landcover_to_mesh(mesh_path, filled_raster, output_layer, column_name, nodata_value):
+    import rasterstats
+    import geopandas as gpd
+    import numpy as np
+
+    stats = rasterstats.zonal_stats(
+        mesh_path,
+        filled_raster,
+        stats="majority",
+        geojson_out=True,
+        nodata=nodata_value
+    )
+    gdf = gpd.GeoDataFrame.from_features(stats)
+    gdf = gdf.rename(columns={"majority": column_name})
+    gdf = gdf[[column_name, "geometry"]]
+    gdf.to_file(mesh_path, layer=output_layer, driver="GPKG")
+
+
+def batch_aggregate_LST(tiff_folder, mesh_folder, batch_size=50):
+    import os
+    import geopandas as gpd
+    from rasterstats import zonal_stats
+    from tqdm import tqdm
+
+    tif_files = sorted([f for f in os.listdir(tiff_folder) if f.endswith(".tif")])
+    mesh_gdf = gpd.read_file(sorted(os.listdir(mesh_folder))[0])
+    for tif_file in tqdm(tif_files):
+        tif_path = tiff_folder / tif_file
+        date_str = tif_file.stem.split("_")[-1]
+        stats = zonal_stats(mesh_gdf, tif_path, stats=["mean"], geojson_out=True)
+        gdf = gpd.GeoDataFrame.from_features(stats)
+        gdf = gdf.rename(columns={"mean": "LST_day_mean"})
+        gdf = gdf[["LST_day_mean", "geometry"]]
+        gdf.to_file(mesh_folder / f"baghdad-{date_str}.gpkg", layer="LST_day", driver="GPKG")
+
+
+def clean_single_layer_gpkg(data_folder, layer_name, columns_to_keep):
+    import geopandas as gpd
+    import os
+
+    for file in os.listdir(data_folder):
+        if file.endswith(".gpkg"):
+            fpath = data_folder / file
+            gdf = gpd.read_file(fpath, layer=layer_name)
+            gdf = gdf[columns_to_keep + ["geometry"]]
+            gdf.to_file(fpath, layer=layer_name, driver="GPKG")
+

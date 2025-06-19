@@ -559,3 +559,51 @@ def specific_date(start_date: str, end_date: str, time_resolution: str = 'D') ->
         .tolist()
     )
     return dates
+
+def clip_raster_with_shapefile_vrt(input_tiff_list, shapefile, output_tiff, nodata_value=255):
+    """
+    Merge multiple TIFFs into a VRT and clip it using shapefile boundary
+    """
+    from rasterio.merge import merge
+    import rasterio
+    from rasterio.mask import mask
+    import geopandas as gpd
+
+    src_files_to_mosaic = [rasterio.open(str(tif)) for tif in input_tiff_list]
+    mosaic, transform = merge(src_files_to_mosaic)
+    meta = src_files_to_mosaic[0].meta.copy()
+    meta.update({
+        "driver": "GTiff",
+        "height": mosaic.shape[1],
+        "width": mosaic.shape[2],
+        "transform": transform,
+        "nodata": nodata_value
+    })
+
+    shapes = gpd.read_file(shapefile)
+    geometry = [shapes.geometry.iloc[0].__geo_interface__]
+
+    with rasterio.open(output_tiff, "w", **meta) as dst:
+        dst.write(mosaic)
+
+    with rasterio.open(output_tiff) as src:
+        out_image, out_transform = mask(src, geometry, crop=True, nodata=nodata_value)
+        out_meta = src.meta.copy()
+        out_meta.update({
+            "height": out_image.shape[1],
+            "width": out_image.shape[2],
+            "transform": out_transform,
+            "nodata": nodata_value
+        })
+
+    with rasterio.open(output_tiff, "w", **out_meta) as dest:
+        dest.write(out_image)
+
+def revert_tiff_filenames_to_match_mesh(folder_path):
+    import os
+    import re
+
+    for file in os.listdir(folder_path):
+        if file.endswith("_filled.tif"):
+            new_name = re.sub(r".*_(\d{4}_\d{2}_\d{2})_filled.tif", r"addis-ababa_LST_\1_filled.tif", file)
+            os.rename(folder_path / file, folder_path / new_name)
