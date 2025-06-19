@@ -502,68 +502,66 @@ def aggregate_landcover_to_mesh(
     print(f"[Saved] {output_layer} written to: {mesh_path}")
 
 
-
 import os
-import re
-from pathlib import Path
-import rasterio
 import geopandas as gpd
-from rasterstats import zonal_stats
+import rasterio
+import rasterstats
+from pathlib import Path
 from tqdm import tqdm
 
 def batch_aggregate_LST(tiff_folder: Path, mesh_folder: Path, batch_size: int = 50):
     """
-    Batch aggregate MODIS LST TIFFs to mesh GPKGs using mean value per polygon.
+    Batch aggregate LST TIFF files into corresponding daily mesh GPKG files.
 
-    Parameters
-    ----------
-    tiff_folder : Path
-        Folder containing filled LST TIFFs.
-    mesh_folder : Path
-        Folder containing corresponding GPKG mesh files.
-    batch_size : int
-        Number of files to process per batch (optional, unused in current version).
+    Parameters:
+    - tiff_folder (Path): folder containing LST GeoTIFFs (renamed to city-YYYY-MM-DD.tif)
+    - mesh_folder (Path): folder containing corresponding GPKG mesh files
+    - batch_size (int): number of TIFFs to process in one batch
     """
-    tif_files = sorted([f for f in os.listdir(tiff_folder) if f.endswith(".tif")])
+    if not isinstance(tiff_folder, Path):
+        tiff_folder = Path(tiff_folder)
+    if not isinstance(mesh_folder, Path):
+        mesh_folder = Path(mesh_folder)
 
-    for tif_file in tqdm(tif_files):
-        match = re.search(r"(\d{4}-\d{2}-\d{2})", tif_file)
-        if not match:
-            print(f"⚠️  Cannot extract date from {tif_file}, skipping.")
-            continue
+    tif_files = sorted([f for f in tiff_folder.glob("*.tif") if "-" in f.name])
+    print(f"📦 Found {len(tif_files)} TIFF files to process")
 
-        date_str = match.group(1)
-        city = tif_file.split("_LST_")[0]
-        mesh_path = mesh_folder / f"{city}-{date_str}.gpkg"
+    for i in tqdm(range(0, len(tif_files), batch_size)):
+        batch = tif_files[i:i+batch_size]
 
-        if not mesh_path.exists():
-            print(f"⚠️  No mesh file found for {tif_file}, skipping.")
-            continue
+        for tif in batch:
+            try:
+                date_str = tif.stem.split("-")[-3:]  # ['2023', '01', '01']
+                date_str = "-".join(date_str)
+                city = "-".join(tif.stem.split("-")[:-3])
+                gpkg_path = mesh_folder / f"{city}-{date_str}.gpkg"
 
-        tiff_path = tiff_folder / tif_file
+                if not gpkg_path.exists():
+                    print(f"❌ Missing mesh file: {gpkg_path.name}, skipping.")
+                    continue
 
-        try:
-            stats = zonal_stats(
-                mesh_path,
-                tiff_path,
-                stats="mean",
-                geojson_out=True,
-                nodata=-9999
-            )
-            gdf = gpd.GeoDataFrame.from_features(stats)
-            gdf = gdf.rename(columns={"mean": "LST_day_mean"})
-            gdf = gdf[["LST_day_mean", "geometry"]]
+                # Read mesh
+                mesh = gpd.read_file(gpkg_path, layer=0)
+                if mesh.empty:
+                    print(f"❌ Empty mesh in: {gpkg_path.name}, skipping.")
+                    continue
 
-            # Overwrite GPKG with only one layer "LST_day"
-            gdf.to_file(mesh_path, layer="LST_day", driver="GPKG")
+                # Compute zonal mean
+                zs = rasterstats.zonal_stats(
+                    vectors=mesh["geometry"],
+                    raster=str(tif),
+                    stats=["mean"],
+                    nodata=0,
+                    geojson_out=False
+                )
 
-        except Exception as e:
-            print(f"❌ Error processing {tif_file}: {e}")
-            continue
+                mesh["LST_day_mean"] = [item["mean"] for item in zs]
+                mesh = mesh.dropna(subset=["LST_day_mean"])
 
-    print(f"✅ Batch LST aggregation complete. Processed {len(tif_files)} files.")
-
-
+                # Write to new layer in same GPKG
+                mesh.to_file(gpkg_path, layer="LST_day", driver="GPKG")
+            except Exception as e:
+                print(f"❌ Failed to process {tif.name}: {e}")
 
         
 
