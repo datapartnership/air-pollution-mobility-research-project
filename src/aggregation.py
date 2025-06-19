@@ -503,23 +503,54 @@ def aggregate_landcover_to_mesh(
 
 
 
-def batch_aggregate_LST(tiff_folder, mesh_folder, batch_size=50):
-    import os
-    import geopandas as gpd
+def batch_aggregate_LST(
+    tiff_folder: Path,
+    mesh_folder: Path,
+    batch_size: int = 50
+) -> None:
+    """
+    Aggregate LST TIFFs into mesh GPKG files using zonal stats.
+
+    Parameters
+    ----------
+    tiff_folder : Path
+        Folder containing daily filled TIFFs.
+    mesh_folder : Path
+        Folder containing daily mesh GPKG files.
+    batch_size : int
+        Number of files to process in one batch (for progress display).
+    """
     from rasterstats import zonal_stats
     from tqdm import tqdm
+    import numpy as np
 
     tif_files = sorted([f for f in os.listdir(tiff_folder) if f.endswith(".tif")])
-    mesh_gdf = gpd.read_file(sorted(os.listdir(mesh_folder))[0])
-    for tif_file in tqdm(tif_files):
-        tif_path = tiff_folder / tif_file
-        date_str = tif_file.stem.split("_")[-1]
-        stats = zonal_stats(mesh_gdf, tif_path, stats=["mean"], geojson_out=True)
-        gdf = gpd.GeoDataFrame.from_features(stats)
-        gdf = gdf.rename(columns={"mean": "LST_day_mean"})
-        gdf = gdf[["LST_day_mean", "geometry"]]
-        gdf.to_file(mesh_folder / f"baghdad-{date_str}.gpkg", layer="LST_day", driver="GPKG")
+    gpkg_files = sorted([f for f in os.listdir(mesh_folder) if f.endswith(".gpkg")])
 
+    for tif_file in tqdm(tif_files):
+        date_str = tif_file.split("_")[-1].replace("_filled.tif", "")
+        mesh_file = next((f for f in gpkg_files if date_str in f), None)
+
+        if mesh_file is None:
+            print(f"No mesh file found for {date_str}, skipping.")
+            continue
+
+        mesh_path = mesh_folder / mesh_file
+        tif_path = tiff_folder / tif_file
+
+        try:
+            stats = zonal_stats(
+                mesh_path,
+                tif_path,
+                stats=["mean"],
+                geojson_out=True,
+                prefix="LST_day_"
+            )
+            gdf = gpd.GeoDataFrame.from_features(stats)
+            gdf.to_file(mesh_path, layer="LST_day", driver="GPKG")
+            print(f"Aggregated {tif_file} -> {mesh_file}")
+        except Exception as e:
+            print(f"Failed to process {tif_file}: {e}")
 
 def clean_single_layer_gpkg(data_folder, layer_name, columns_to_keep):
     import geopandas as gpd
