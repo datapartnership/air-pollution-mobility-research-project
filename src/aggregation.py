@@ -503,54 +503,87 @@ def aggregate_landcover_to_mesh(
 
 
 
-def batch_aggregate_LST(
-    tiff_folder: Path,
-    mesh_folder: Path,
-    batch_size: int = 50
-) -> None:
-    """
-    Aggregate LST TIFFs into mesh GPKG files using zonal stats.
+import os
+import re
+from pathlib import Path
+import geopandas as gpd
+import rasterio
+import numpy as np
+from rasterstats import zonal_stats
+from tqdm import tqdm
 
+def batch_aggregate_LST(tiff_folder: Path, mesh_folder: Path, batch_size: int = 50) -> None:
+    """
+    Batch aggregate daily surface temperature TIFFs to mesh polygons using zonal mean.
+    
     Parameters
     ----------
     tiff_folder : Path
-        Folder containing daily filled TIFFs.
+        Folder containing filled LST TIFF files.
     mesh_folder : Path
-        Folder containing daily mesh GPKG files.
+        Folder containing daily mesh GeoPackage files (with matching dates).
     batch_size : int
-        Number of files to process in one batch (for progress display).
+        Number of files to process in one batch.
     """
-    from rasterstats import zonal_stats
-    from tqdm import tqdm
-    import numpy as np
-
     tif_files = sorted([f for f in os.listdir(tiff_folder) if f.endswith(".tif")])
-    gpkg_files = sorted([f for f in os.listdir(mesh_folder) if f.endswith(".gpkg")])
 
     for tif_file in tqdm(tif_files):
-        date_str = tif_file.split("_")[-1].replace("_filled.tif", "")
-        mesh_file = next((f for f in gpkg_files if date_str in f), None)
-
-        if mesh_file is None:
-            print(f"No mesh file found for {date_str}, skipping.")
-            continue
-
-        mesh_path = mesh_folder / mesh_file
         tif_path = tiff_folder / tif_file
 
+        # Extract date string from filename (e.g. "2023-01-02")
+        match = re.search(r"\d{4}-\d{2}-\d{2}", tif_file)
+        if not match:
+            print(f"Cannot extract date from {tif_file}, skipping.")
+            continue
+        date_str = match.group(0)
+
+        # Look for corresponding mesh file
+        mesh_filename = f"{date_str}.gpkg"
+        mesh_candidates = list(mesh_folder.glob(f"*{mesh_filename}"))
+        if not mesh_candidates:
+            print(f"No mesh file found for {tif_file}, skipping.")
+            continue
+        mesh_path = mesh_candidates[0]
+
+        # Attempt to open mesh layer
+        try:
+            gdf = gpd.read_file(mesh_path)
+        except Exception as e:
+            print(f"Cannot read mesh file {mesh_path.name}: {e}")
+            continue
+
+        # Get CRS-aligned mesh
+        with rasterio.open(tif_path) as src:
+            raster_crs = src.crs
+            nodata = src.nodata
+
+        gdf = gdf.to_crs(raster_crs)
+
+        # Compute zonal mean for each polygon
         try:
             stats = zonal_stats(
-                mesh_path,
-                tif_path,
+                vectors=gdf,
+                raster=tif_path,
                 stats=["mean"],
+                nodata=nodata,
                 geojson_out=True,
                 prefix="LST_day_"
             )
-            gdf = gpd.GeoDataFrame.from_features(stats)
-            gdf.to_file(mesh_path, layer="LST_day", driver="GPKG")
-            print(f"Aggregated {tif_file} -> {mesh_file}")
         except Exception as e:
-            print(f"Failed to process {tif_file}: {e}")
+            print(f"Zonal stats failed for {tif_file}: {e}")
+            continue
+
+        gdf_result = gpd.GeoDataFrame.from_features(stats)
+        gdf_result = gdf_result[["geometry", "LST_day_mean"]]
+
+        # Overwrite same mesh file with new layer
+        try:
+            gdf_result.to_file(mesh_path, layer="LST_day", driver="GPKG")
+        except Exception as e:
+            print(f"Failed to write to {mesh_path.name}: {e}")
+            continue
+
+        
 
 def clean_single_layer_gpkg(data_folder, layer_name, columns_to_keep):
     import geopandas as gpd
