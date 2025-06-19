@@ -455,7 +455,15 @@ def fill_surface_temperature_data(
             out_meta = src.meta.copy()
             out_meta.update({"nodata": nodata})
 
-        out_path = output_folder / (tif.replace(".tif", "_filled.tif"))
+
+        match = re.search(r"(\d{4})_(\d{2})_(\d{2})", tif)
+        if match:
+            date_str = f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+            out_name = f"{city}-LST-{date_str}_filled.tif"
+        else:
+            out_name = city + "-LST-filled.tif"  # fallback
+        out_path = output_path / out_name
+
 
         with rasterio.open(out_path, 'w', **out_meta) as dst:
             dst.write(np.where(np.isnan(filled), nodata, filled).astype(out_meta['dtype']), 1)
