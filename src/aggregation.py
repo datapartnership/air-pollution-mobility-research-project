@@ -589,8 +589,8 @@ def batch_aggregate_LST(tiff_folder: Path, mesh_folder: Path, batch_size: int = 
 
 def clean_single_layer_gpkg(data_folder: Path, layer_name: str, columns_to_keep: list):
     """
-    Clean up GPKG files by keeping only one specified layer and selected columns.
-    Only retains the specified layer and columns in each file.
+    Clean each GPKG file in the folder by keeping only the specified layer and selected columns.
+    Ensures only one geometry column is present and writes back to the same GPKG file.
     """
     from tqdm import tqdm
 
@@ -601,23 +601,25 @@ def clean_single_layer_gpkg(data_folder: Path, layer_name: str, columns_to_keep:
         try:
             gdf = gpd.read_file(fpath, layer=layer_name)
         except Exception as e:
-            print(f"❌ Cannot read layer '{layer_name}' in {file}: {e}")
+            print(f"Cannot read layer '{layer_name}' in {file}: {e}")
             continue
 
-        # Drop other geometry columns if they exist
+        # Remove any secondary geometry columns
         for col in gdf.columns:
-            if col.startswith("geometry") and col != "geometry":
+            if col != "geometry" and gdf[col].dtype.name == "geometry":
                 gdf = gdf.drop(columns=[col])
 
         # Make sure 'geometry' is the active geometry
-        gdf.set_geometry("geometry", inplace=True)
+        gdf = gdf.set_geometry("geometry")
 
-        # Only keep requested columns (plus geometry)
+        # Only keep valid geometry
+        gdf = gdf[gdf.geometry.notnull() & gdf.is_valid]
+
+        # Keep only the specified columns that exist
         keep_cols = [col for col in columns_to_keep if col in gdf.columns]
         gdf = gdf[keep_cols + ["geometry"]]
 
-        # Overwrite file with cleaned layer
-        out_path = fpath.with_suffix("")  # remove .gpkg
+        # Overwrite the original file with only one cleaned layer
         gdf.to_file(fpath, layer=layer_name, driver="GPKG")
 
-
+        print(f" Cleaned: {file}")
