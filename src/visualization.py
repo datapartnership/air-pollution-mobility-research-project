@@ -1141,33 +1141,83 @@ def generate_LST_mesh_animation(data_folder, output_gif, layer_name="LST_day", c
             writer.append_data(imageio.v3.imread(img_path))
 
 
+from matplotlib.colors import ListedColormap, BoundaryNorm
+
 def get_modis_landcover_colormap():
-    from matplotlib import colors
-    cmap = colors.ListedColormap([
-        "#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e", "#e6ab02", "#a6761d", "#666666"
-    ])
-    class_values = [0, 1, 2, 3, 4, 5, 6, 7]
-    class_names = [
-        "Water", "Evergreen Needleleaf Forest", "Evergreen Broadleaf Forest",
-        "Deciduous Needleleaf Forest", "Deciduous Broadleaf Forest", "Mixed Forest",
-        "Closed Shrublands", "Open Shrublands"
+    """
+    Returns MODIS LC_Type1 class values, names, colormap, and normalization.
+    """
+    class_values = [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+        10, 11, 12, 13, 14, 15, 16, 254, 255
     ]
-    norm = colors.BoundaryNorm(class_values + [max(class_values)+1], cmap.N)
+
+    class_names = [
+        "Water",
+        "Evergreen Needleleaf Forest", "Evergreen Broadleaf Forest",
+        "Deciduous Needleleaf Forest", "Deciduous Broadleaf Forest",
+        "Mixed Forest", "Closed Shrublands", "Open Shrublands",
+        "Woody Savannas", "Savannas", "Grasslands", "Permanent Wetlands",
+        "Croplands", "Urban", "Crop/Natural Mosaic", "Snow/Ice",
+        "Barren", "Unclassified (254)", "Fill Value (255)"
+    ]
+
+    class_colors = [
+        "#1f78b4",  # Water
+        "#006400", "#228B22",  # Forests
+        "#8B4513", "#9ACD32",
+        "#556B2F", "#8FBC8F", "#D2B48C",  # Shrublands
+        "#DEB887", "#F4A460",  # Savannas
+        "#ADFF2F", "#00CED1",  # Grasslands, Wetlands
+        "#FFD700", "#B22222", "#DAA520",  # Croplands, Urban, Mosaic
+        "#FFFFFF", "#A9A9A9",  # Snow/Ice, Barren
+        "#CCCCCC", "#000000"   # Unclassified, Fill
+    ]
+
+    cmap = ListedColormap(class_colors)
+    norm = BoundaryNorm(class_values + [256], cmap.N)
+
     return class_values, class_names, cmap, norm
 
 
-def plot_landcover_legend_map(tiff_path, class_values, class_names, cmap, norm, title="Land Cover"):
-    import rasterio
-    import matplotlib.pyplot as plt
-    from rasterio.plot import show
 
+import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
+import rasterio
+
+def plot_landcover_legend_map(tiff_path, class_values, class_names, cmap, norm, title="Land Cover Classification"):
+    """
+    Plot a land cover raster with custom categorical legend.
+
+    Parameters
+    ----------
+    tiff_path : Path
+        Raster file path.
+    class_values : list of int
+        Land cover class codes.
+    class_names : list of str
+        Descriptions for each class.
+    cmap : ListedColormap
+        Color map for land cover values.
+    norm : BoundaryNorm
+        Value-to-color mapping.
+    title : str
+        Title for the plot.
+    """
     with rasterio.open(tiff_path) as src:
-        fig, ax = plt.subplots(figsize=(6, 6))
-        show(src, ax=ax, cmap=cmap, norm=norm)
-        ax.set_title(title)
-        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-        sm.set_array([])
-        cbar = fig.colorbar(sm, ax=ax, ticks=class_values)
-        cbar.ax.set_yticklabels(class_names)
-        plt.show()
+        data = src.read(1)
+
+    plt.figure(figsize=(8, 6))
+    im = plt.imshow(data, cmap=cmap, norm=norm)
+    plt.title(title, fontsize=13)
+    plt.axis("off")
+
+    # Build legend using Patches
+    handles = [
+        Patch(facecolor=cmap(norm(v)), edgecolor='black', label=label)
+        for v, label in zip(class_values, class_names)
+    ]
+    plt.legend(handles=handles, bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0., fontsize=9)
+    plt.tight_layout()
+    plt.show()
 

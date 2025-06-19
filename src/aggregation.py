@@ -14,6 +14,8 @@ from rasterstats import zonal_stats
 from pathlib import Path
 import pandas as pd
 from pandas import DataFrame
+from typing import Union
+
 
 # Function: Aggregate data within each mesh
 def aggregate_to_mesh(mesh_grid, 
