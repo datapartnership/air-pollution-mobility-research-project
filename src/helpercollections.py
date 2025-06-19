@@ -607,3 +607,56 @@ def revert_tiff_filenames_to_match_mesh(folder_path):
         if file.endswith("_filled.tif"):
             new_name = re.sub(r".*_(\d{4}_\d{2}_\d{2})_filled.tif", r"addis-ababa_LST_\1_filled.tif", file)
             os.rename(folder_path / file, folder_path / new_name)
+
+import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap, BoundaryNorm
+import numpy as np
+
+def get_esa_landcover_colormap():
+    """
+    Returns ESA WorldCover 2021 class values, names, colormap, and normalization object.
+
+    Returns
+    -------
+    class_values : list of int
+        ESA land cover class values.
+    class_names : list of str
+        Human-readable names for each class.
+    cmap : ListedColormap
+        Colormap object for visualization.
+    norm : BoundaryNorm
+        Normalization object matching class values to color bins.
+    """
+
+    class_values = [
+        10, 20, 30, 40, 50, 60, 70, 80,
+        90, 95, 100, 111, 112, 113
+    ]
+
+    class_names = [
+        "Tree cover", "Shrubland", "Grassland", "Cropland",
+        "Built-up", "Bare/sparse vegetation", "Snow and ice", "Water bodies",
+        "Wetlands", "Mangroves", "Moss and lichen", "Permanent snow", "Glaciers", "Others"
+    ]
+
+    class_colors = [
+        "#006400",  # 10 Tree cover (dark green)
+        "#ffbb22",  # 20 Shrubland (light brown)
+        "#ffff4c",  # 30 Grassland (yellow)
+        "#f096ff",  # 40 Cropland (pink)
+        "#fa0000",  # 50 Built-up (red)
+        "#b4b4b4",  # 60 Sparse vegetation (gray)
+        "#f0f0f0",  # 70 Snow and ice (white)
+        "#0064c8",  # 80 Water bodies (blue)
+        "#0096a0",  # 90 Wetlands (teal)
+        "#00cf75",  # 95 Mangroves (greenish)
+        "#fae6a0",  # 100 Moss and lichen (beige)
+        "#dcdcdc",  # 111 Permanent snow (light gray)
+        "#b0e0e6",  # 112 Glaciers (pale blue)
+        "#a0a0a0",  # 113 Others/unclassified
+    ]
+
+    cmap = ListedColormap(class_colors)
+    norm = BoundaryNorm(class_values + [114], cmap.N)
+
+    return class_values, class_names, cmap, norm
