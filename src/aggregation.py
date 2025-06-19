@@ -512,77 +512,73 @@ import numpy as np
 from rasterstats import zonal_stats
 from tqdm import tqdm
 
-def batch_aggregate_LST(tiff_folder: Path, mesh_folder: Path, batch_size: int = 50) -> None:
+def batch_aggregate_LST(
+    tiff_folder: Path,
+    mesh_folder: Path,
+    batch_size: int = 50
+):
     """
-    Batch aggregate daily surface temperature TIFFs to mesh polygons using zonal mean.
-    Supports filenames with either YYYY-MM-DD or YYYY_MM_DD format.
+    Batch aggregate daily LST raster files to the corresponding mesh file.
+
+    Parameters
+    ----------
+    tiff_folder : Path
+        Folder containing filled daily LST GeoTIFFs.
+    mesh_folder : Path
+        Folder to save GPKG files containing aggregated mesh-level LST data.
+    batch_size : int
+        Number of files to process in one batch (not strictly used here, but can be extended).
     """
+    import geopandas as gpd
+    import rasterstats
+    from tqdm import tqdm
+    import re
+
     tif_files = sorted([f for f in os.listdir(tiff_folder) if f.endswith(".tif")])
-    skipped_files = []
+    mesh_sample = next(iter(mesh_folder.glob("*.gpkg")), None)
+
+    if mesh_sample is None:
+        raise FileNotFoundError("No mesh file found in mesh_folder.")
+
+    city = mesh_sample.stem.split("-")[0]
+    print(f"Detected city: {city}")
 
     for tif_file in tqdm(tif_files):
-        tif_path = tiff_folder / tif_file
-
-        # Extract date string (support both YYYY-MM-DD and YYYY_MM_DD)
-        match = re.search(r"\d{4}[-_]\d{2}[-_]\d{2}", tif_file)
+        match = re.search(r"(\d{4}-\d{2}-\d{2})", tif_file)
         if not match:
-            print(f"❌ Cannot extract date from {tif_file}, skipping.")
-            skipped_files.append(tif_file)
+            print(f"⚠️  Cannot extract date from {tif_file}, skipping.")
             continue
 
-        date_str_raw = match.group(0)
-        date_str = date_str_raw.replace("_", "-")  # normalize
+        date_str = match.group(1)
+        tif_path = tiff_folder / tif_file
+        mesh_path = mesh_folder / f"{city}-{date_str}.gpkg"
 
-        # Look for mesh file
-        mesh_filename = f"{date_str}.gpkg"
-        mesh_candidates = list(mesh_folder.glob(f"*{mesh_filename}"))
-        if not mesh_candidates:
-            print(f"⚠️ No mesh file found for {tif_file}, skipping.")
-            skipped_files.append(tif_file)
+        if not mesh_path.exists():
+            print(f"No mesh file found for {tif_file}, skipping.")
             continue
-        mesh_path = mesh_candidates[0]
 
         try:
-            gdf = gpd.read_file(mesh_path)
-        except Exception as e:
-            print(f"❌ Cannot read mesh file {mesh_path.name}: {e}")
-            skipped_files.append(tif_file)
-            continue
-
-        with rasterio.open(tif_path) as src:
-            raster_crs = src.crs
-            nodata = src.nodata
-
-        gdf = gdf.to_crs(raster_crs)
-
-        try:
-            stats = zonal_stats(
-                vectors=gdf,
-                raster=tif_path,
-                stats=["mean"],
-                nodata=nodata,
+            stats = rasterstats.zonal_stats(
+                mesh_path,
+                tif_path,
+                stats="mean",
                 geojson_out=True,
-                prefix="LST_day_"
+                nodata=0
             )
+            gdf = gpd.GeoDataFrame.from_features(stats)
+            gdf.rename(columns={"mean": "LST_day_mean"}, inplace=True)
+
+            # Drop other geometry columns if accidentally added
+            for col in gdf.columns:
+                if col.startswith("geometry") and col != "geometry":
+                    gdf = gdf.drop(columns=[col])
+            gdf.set_geometry("geometry", inplace=True)
+
+            # Overwrite to GPKG file
+            gdf.to_file(mesh_path, layer="LST_day", driver="GPKG")
         except Exception as e:
-            print(f"❌ Zonal stats failed for {tif_file}: {e}")
-            skipped_files.append(tif_file)
-            continue
+            print(f"❌ Failed processing {tif_file}: {e}")
 
-        gdf_result = gpd.GeoDataFrame.from_features(stats)
-        gdf_result = gdf_result[["geometry", "LST_day_mean"]]
-
-        try:
-            gdf_result.to_file(mesh_path, layer="LST_day", driver="GPKG")
-        except Exception as e:
-            print(f"❌ Failed to write to {mesh_path.name}: {e}")
-            skipped_files.append(tif_file)
-            continue
-
-    if skipped_files:
-        print(f"\n⛔ Skipped {len(skipped_files)} files:")
-        for f in skipped_files:
-            print(f" - {f}")
 
 
         
