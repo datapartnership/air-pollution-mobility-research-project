@@ -587,14 +587,37 @@ def batch_aggregate_LST(tiff_folder: Path, mesh_folder: Path, batch_size: int = 
 
         
 
-def clean_single_layer_gpkg(data_folder, layer_name, columns_to_keep):
-    import geopandas as gpd
-    import os
+def clean_single_layer_gpkg(data_folder: Path, layer_name: str, columns_to_keep: list):
+    """
+    Clean up GPKG files by keeping only one specified layer and selected columns.
+    Only retains the specified layer and columns in each file.
+    """
+    from tqdm import tqdm
 
-    for file in os.listdir(data_folder):
-        if file.endswith(".gpkg"):
-            fpath = data_folder / file
+    gpkg_files = sorted([f for f in os.listdir(data_folder) if f.endswith(".gpkg")])
+
+    for file in tqdm(gpkg_files):
+        fpath = data_folder / file
+        try:
             gdf = gpd.read_file(fpath, layer=layer_name)
-            gdf = gdf[columns_to_keep + ["geometry"]]
-            gdf.to_file(fpath, layer=layer_name, driver="GPKG")
+        except Exception as e:
+            print(f"❌ Cannot read layer '{layer_name}' in {file}: {e}")
+            continue
+
+        # Drop other geometry columns if they exist
+        for col in gdf.columns:
+            if col.startswith("geometry") and col != "geometry":
+                gdf = gdf.drop(columns=[col])
+
+        # Make sure 'geometry' is the active geometry
+        gdf.set_geometry("geometry", inplace=True)
+
+        # Only keep requested columns (plus geometry)
+        keep_cols = [col for col in columns_to_keep if col in gdf.columns]
+        gdf = gdf[keep_cols + ["geometry"]]
+
+        # Overwrite file with cleaned layer
+        out_path = fpath.with_suffix("")  # remove .gpkg
+        gdf.to_file(fpath, layer=layer_name, driver="GPKG")
+
 
