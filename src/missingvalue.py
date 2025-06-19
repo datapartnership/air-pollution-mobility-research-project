@@ -406,70 +406,68 @@ def fill_cloud_missing_data(
 
 
 
+
+
 import os
 import re
-import numpy as np
-import rasterio
-from rasterio.enums import Resampling
-from scipy.ndimage import generic_filter
 from pathlib import Path
-from tqdm import tqdm
+import rasterio
+import numpy as np
+from scipy.ndimage import generic_filter
 
 def fill_surface_temperature_data(city, data_tiff_path, output_path):
     """
-    Fill missing values in LST TIFFs using 3x3 mean filter and save with consistent naming.
+    Fill missing values in daily MODIS LST TIFFs using 3x3 mean filter.
 
     Parameters
     ----------
     city : str
-        Name of the city (used in output filename).
+        City identifier (e.g. 'baghdad', 'addis-ababa').
     data_tiff_path : Path
-        Path to the folder containing LST .tif files.
+        Path to the folder containing original daily LST TIFF files.
     output_path : Path
-        Output folder to save filled TIFFs.
+        Folder to save filled TIFFs (with consistent naming).
     """
-    output_path = Path(output_path)
-    data_tiff_path = Path(data_tiff_path)
+    tif_files = sorted([f for f in os.listdir(data_tiff_path) if f.endswith(".tif")])
+    print(f"Detected city: {city.split('-')[0]}")  # Debug print
 
-    output_path.mkdir(parents=True, exist_ok=True)
-    tif_files = [f for f in os.listdir(data_tiff_path) if f.endswith(".tif")]
+    for file in tif_files:
+        full_path = data_tiff_path / file
+        try:
+            with rasterio.open(full_path) as src:
+                arr = src.read(1)
+                nodata = src.nodata if src.nodata is not None else -9999
 
-    for file in tqdm(tif_files):
-        match = re.search(r"(\d{4})[-_](\d{2})[-_](\d{2})", file)
-        if not match:
-            print(f"⚠️  Cannot extract date from {file}, skipping.")
+                def mode_filter(values):
+                    vals = values[values != nodata]
+                    if len(vals) == 0:
+                        return nodata
+                    return np.nanmean(vals)
+
+                filled = generic_filter(arr, mode_filter, size=3, mode='constant', cval=nodata)
+
+                out_meta = src.meta.copy()
+                out_meta.update({"nodata": nodata})
+
+            # Extract date using regex (supports _ or -)
+            match = re.search(r"(\d{4})[-_](\d{2})[-_](\d{2})", file)
+            if match:
+                date_str = f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+                out_name = f"{city}_LST_{date_str}_filled.tif"
+                out_path = output_path / out_name
+
+                with rasterio.open(out_path, 'w', **out_meta) as dst:
+                    dst.write(filled, 1)
+
+            else:
+                print(f" Cannot extract date from {file}, skipping.")
+                continue
+
+        except Exception as e:
+            print(f" Failed to process {file}: {e}")
             continue
 
-        date_str = f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
-
-        with rasterio.open(data_tiff_path / file) as src:
-            arr = src.read(1).astype(float)
-            nodata = src.nodata
-
-            # Replace nodata with NaN for filtering
-            if nodata is not None:
-                arr[arr == nodata] = np.nan
-            else:
-                nodata = -9999  # fallback
-
-            def mode_filter(vals):
-                if np.all(np.isnan(vals)):
-                    return nodata
-                return np.nanmean(vals)
-
-            filled = generic_filter(arr, mode_filter, size=3, mode='constant', cval=np.nan)
-
-            out_meta = src.meta.copy()
-            out_meta.update({
-                "nodata": nodata,
-                "dtype": "float32"
-            })
-
-        out_fname = f"{city}_LST_{date_str}_filled.tif"
-        out_path = output_path / out_fname
-
-        with rasterio.open(out_path, 'w', **out_meta) as dst:
-            dst.write(filled.astype("float32"), 1)
+    print(f"✅ Surface temperature filling complete for {len(tif_files)} files in: {data_tiff_path}")
 
 
 import rasterio

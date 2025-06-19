@@ -506,42 +506,25 @@ def aggregate_landcover_to_mesh(
 import os
 import re
 from pathlib import Path
-import geopandas as gpd
 import rasterio
-import numpy as np
+import geopandas as gpd
 from rasterstats import zonal_stats
 from tqdm import tqdm
 
-def batch_aggregate_LST(
-    tiff_folder: Path,
-    mesh_folder: Path,
-    batch_size: int = 50
-):
+def batch_aggregate_LST(tiff_folder: Path, mesh_folder: Path, batch_size: int = 50):
     """
-    Batch aggregate daily LST raster files to the corresponding mesh file.
+    Batch aggregate MODIS LST TIFFs to mesh GPKGs using mean value per polygon.
 
     Parameters
     ----------
     tiff_folder : Path
-        Folder containing filled daily LST GeoTIFFs.
+        Folder containing filled LST TIFFs.
     mesh_folder : Path
-        Folder to save GPKG files containing aggregated mesh-level LST data.
+        Folder containing corresponding GPKG mesh files.
     batch_size : int
-        Number of files to process in one batch (not strictly used here, but can be extended).
+        Number of files to process per batch (optional, unused in current version).
     """
-    import geopandas as gpd
-    import rasterstats
-    from tqdm import tqdm
-    import re
-
     tif_files = sorted([f for f in os.listdir(tiff_folder) if f.endswith(".tif")])
-    mesh_sample = next(iter(mesh_folder.glob("*.gpkg")), None)
-
-    if mesh_sample is None:
-        raise FileNotFoundError("No mesh file found in mesh_folder.")
-
-    city = mesh_sample.stem.split("-")[0]
-    print(f"Detected city: {city}")
 
     for tif_file in tqdm(tif_files):
         match = re.search(r"(\d{4}-\d{2}-\d{2})", tif_file)
@@ -550,34 +533,35 @@ def batch_aggregate_LST(
             continue
 
         date_str = match.group(1)
-        tif_path = tiff_folder / tif_file
+        city = tif_file.split("_LST_")[0]
         mesh_path = mesh_folder / f"{city}-{date_str}.gpkg"
 
         if not mesh_path.exists():
-            print(f"No mesh file found for {tif_file}, skipping.")
+            print(f"⚠️  No mesh file found for {tif_file}, skipping.")
             continue
 
+        tiff_path = tiff_folder / tif_file
+
         try:
-            stats = rasterstats.zonal_stats(
+            stats = zonal_stats(
                 mesh_path,
-                tif_path,
+                tiff_path,
                 stats="mean",
                 geojson_out=True,
-                nodata=0
+                nodata=-9999
             )
             gdf = gpd.GeoDataFrame.from_features(stats)
-            gdf.rename(columns={"mean": "LST_day_mean"}, inplace=True)
+            gdf = gdf.rename(columns={"mean": "LST_day_mean"})
+            gdf = gdf[["LST_day_mean", "geometry"]]
 
-            # Drop other geometry columns if accidentally added
-            for col in gdf.columns:
-                if col.startswith("geometry") and col != "geometry":
-                    gdf = gdf.drop(columns=[col])
-            gdf.set_geometry("geometry", inplace=True)
-
-            # Overwrite to GPKG file
+            # Overwrite GPKG with only one layer "LST_day"
             gdf.to_file(mesh_path, layer="LST_day", driver="GPKG")
+
         except Exception as e:
-            print(f"❌ Failed processing {tif_file}: {e}")
+            print(f"❌ Error processing {tif_file}: {e}")
+            continue
+
+    print(f"✅ Batch LST aggregation complete. Processed {len(tif_files)} files.")
 
 
 
