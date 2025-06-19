@@ -98,7 +98,8 @@ def iterative_fill(
 def fill_missing_data(
     country: str,
     data_tiff_path: Path,
-    output_path: Path
+    output_path: Path,
+    feature: str = "NO2"
 ) -> None:
     """
     Fill missing (nodata) values in all TIFF files in a given directory and
@@ -123,7 +124,7 @@ def fill_missing_data(
     n_task = len(tiff_files)
 
     # Define output directory and create it if not exist
-    output_dir = output_path / f"{country}-no2-filled"
+    output_dir = output_path / f"{country}-{feature}-filled"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for index, tiff_path in enumerate(tiff_files):
@@ -141,7 +142,7 @@ def fill_missing_data(
 
         band_filled = iterative_fill(band, max_iter=10, window_size=9)
 
-        output_file = output_dir / f"{country}_NO2_{date}_filled.tif"
+        output_file = output_dir / f"{country}_{feature}_{date}_filled.tif"
         with rasterio.open(output_file, 'w', **profile) as dst:
             filled_band = np.where(np.isnan(band_filled), nodata_value, band_filled)
             dst.write(filled_band.astype(profile['dtype']), 1)
