@@ -660,3 +660,44 @@ def get_esa_landcover_colormap():
     norm = BoundaryNorm(class_values + [114], cmap.N)
 
     return class_values, class_names, cmap, norm
+
+import rasterio
+from rasterio.mask import mask
+import geopandas as gpd
+from shapely.geometry import mapping
+
+def clip_raster_with_shapefile(input_tiff, shapefile, output_tiff, nodata_value=255):
+    """
+    Clip a raster TIFF file using the geometry of a shapefile.
+
+    Parameters
+    ----------
+    input_tiff : Path
+        Path to the input raster TIFF file.
+    shapefile : Path
+        Path to the shapefile used for clipping.
+    output_tiff : Path
+        Path to save the clipped raster.
+    nodata_value : int or float, optional
+        Value to assign to nodata areas in the output raster. Default is 255.
+    """
+    # Load shapefile geometry
+    shapes = gpd.read_file(shapefile)
+    geometry = [mapping(shapes.geometry.iloc[0])]
+
+    with rasterio.open(input_tiff) as src:
+        out_image, out_transform = mask(src, geometry, crop=True, nodata=nodata_value)
+        out_meta = src.meta.copy()
+
+    # Update metadata for the output raster
+    out_meta.update({
+        "driver": "GTiff",
+        "height": out_image.shape[1],
+        "width": out_image.shape[2],
+        "transform": out_transform,
+        "nodata": nodata_value
+    })
+
+    # Save clipped raster
+    with rasterio.open(output_tiff, "w", **out_meta) as dest:
+        dest.write(out_image)
