@@ -1240,3 +1240,69 @@ def get_esa_landcover_colormap():
     norm = BoundaryNorm(class_values + [201], cmap.N)
 
     return class_values, class_names, cmap, norm
+
+import matplotlib.pyplot as plt
+import rasterio
+from rasterio.plot import show
+import numpy as np
+import matplotlib.patches as mpatches
+
+def plot_landcover_legend_map(
+    tiff_path,
+    class_values,
+    class_names,
+    cmap,
+    norm,
+    title="Land Cover Classification",
+    figsize=(10, 10),
+    legend_cols=3
+):
+    """
+    Plot a categorical land cover map with a corresponding legend.
+
+    Parameters
+    ----------
+    tiff_path : Path or str
+        Path to the categorical land cover raster (.tif).
+    class_values : list
+        List of land cover class values (int).
+    class_names : list
+        Corresponding list of class names (str).
+    cmap : ListedColormap
+        Color map for displaying land cover classes.
+    norm : BoundaryNorm
+        Normalization to map values to colors.
+    title : str
+        Title of the plot.
+    figsize : tuple
+        Size of the matplotlib figure.
+    legend_cols : int
+        Number of columns in the legend.
+    """
+    with rasterio.open(tiff_path) as src:
+        image = src.read(1)
+        image = np.ma.masked_equal(image, 255)  # mask nodata
+
+        fig, ax = plt.subplots(figsize=figsize)
+        show(image, ax=ax, cmap=cmap, norm=norm)
+        ax.set_title(title)
+        ax.axis("off")
+
+        # Build legend manually
+        handles = [
+            mpatches.Patch(color=cmap(norm(val)), label=name)
+            for val, name in zip(class_values, class_names)
+            if val in np.unique(image)
+        ]
+
+        # Add legend outside plot
+        fig.legend(
+            handles=handles,
+            loc='lower center',
+            ncol=legend_cols,
+            bbox_to_anchor=(0.5, -0.05),
+            fontsize=9
+        )
+
+        plt.tight_layout()
+        plt.show()
