@@ -600,14 +600,41 @@ def clip_raster_with_shapefile_vrt(input_tiff_list, shapefile, output_tiff, noda
     with rasterio.open(output_tiff, "w", **out_meta) as dest:
         dest.write(out_image)
 
-def revert_tiff_filenames_to_match_mesh(folder_path):
-    import os
-    import re
+import os
+from pathlib import Path
+import re
 
-    for file in os.listdir(folder_path):
-        if file.endswith("_filled.tif"):
-            new_name = re.sub(r".*_(\d{4}_\d{2}_\d{2})_filled.tif", r"addis-ababa_LST_\1_filled.tif", file)
-            os.rename(folder_path / file, folder_path / new_name)
+def revert_tiff_filenames_to_match_mesh(tiff_folder: Path) -> None:
+    """
+    Rename filled TIFF files to match mesh naming convention: city-YYYY-MM-DD.tif
+
+    Example:
+    From: addis-ababa_LST_2023-01-01_filled.tif
+    To:   addis-ababa-2023-01-01.tif
+
+    Parameters:
+    - tiff_folder (Path): folder containing filled TIFF files
+    """
+    if not isinstance(tiff_folder, Path):
+        tiff_folder = Path(tiff_folder)
+
+    tif_files = list(tiff_folder.glob("*_filled.tif"))
+    renamed = 0
+
+    for tif in tif_files:
+        match = re.search(r"(.+)_LST_(\d{4}-\d{2}-\d{2})_filled\.tif", tif.name)
+        if match:
+            city = match.group(1)
+            date_str = match.group(2)
+            new_name = f"{city}-{date_str}.tif"
+            new_path = tif.parent / new_name
+            tif.rename(new_path)
+            renamed += 1
+        else:
+            print(f" Cannot extract date from {tif.name}, skipping.")
+
+    print(f"Renamed {renamed} TIFF files to standard format.")
+
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, BoundaryNorm
@@ -703,6 +730,66 @@ def clip_raster_with_shapefile(input_tiff, shapefile, output_tiff, nodata_value=
     with rasterio.open(output_tiff, "w", **out_meta) as dest:
         dest.write(out_image)
 
+
+from rasterio.mask import mask
+from shapely.geometry import box, mapping
+from pathlib import Path
+import rasterio
+import os
+
+def clip_tiff_with_bbox(city, data_tiff_path, output_path,
+                        min_lon, min_lat, max_lon, max_lat):
+    """
+    Clip all GeoTIFF files in a folder using a bounding box and save them 
+    into a structured output folder specific to LST.
+
+    Parameters:
+    - city (str): city name (used in naming output folder)
+    - data_tiff_path (Path): folder containing input GeoTIFFs
+    - output_path (Path): folder to save clipped GeoTIFFs
+    - min_lon, min_lat, max_lon, max_lat (float): bounding box coordinates
+
+    Returns:
+    - Path: folder containing all clipped GeoTIFFs
+    """
+    if not isinstance(data_tiff_path, Path):
+        data_tiff_path = Path(data_tiff_path)
+    if not isinstance(output_path, Path):
+        output_path = Path(output_path)
+
+    tiff_files = sorted(data_tiff_path.glob("*.tif"))
+    if not tiff_files:
+        print(f"⚠️ No TIFF files found in {data_tiff_path}")
+        return None
+
+    output_dir = output_path / f"{city}-LST-clipped"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    bbox = box(min_lon, min_lat, max_lon, max_lat)
+    geo = [mapping(bbox)]
+
+    for idx, tif in enumerate(tiff_files, 1):
+        print(f"📦 Clipping {idx}/{len(tiff_files)}: {tif.name}")
+        try:
+            with rasterio.open(tif) as src:
+                out_image, out_transform = mask(src, geo, crop=True)
+                out_meta = src.meta.copy()
+
+            out_meta.update({
+                "driver": "GTiff",
+                "height": out_image.shape[1],
+                "width": out_image.shape[2],
+                "transform": out_transform
+            })
+
+            out_tif_path = output_dir / tif.name
+            with rasterio.open(out_tif_path, "w", **out_meta) as dest:
+                dest.write(out_image)
+        except Exception as e:
+            print(f"❌ Failed to clip {tif.name}: {e}")
+
+    print(f"✅ All clipped TIFF files saved to {output_dir}")
+    return output_dir
 
 
 import geopandas as gpd
@@ -837,3 +924,4 @@ def convert_gpkgs_to_parquet(mesh_folder: Path, output_path: Path, file_name: st
 
     full_df = pd.concat(all_data, ignore_index=True)
     full_df.to_parquet(output_path / f"{file_name}.parquet", engine="pyarrow", compression="snappy")
+
