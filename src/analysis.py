@@ -339,3 +339,186 @@ def add_lag_features(full_df, output_path: Path, file_name: str, k_neighbors=8) 
     full_df.to_parquet(output_path / f"{file_name}.parquet", engine="pyarrow", compression="snappy")
 
     return full_df
+
+
+import shap
+import xgboost as xgb
+from sklearn.pipeline import Pipeline
+import shap
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ========== SHAP Visualization Function ==========
+def explain_shap_rf(
+    pipeline:Pipeline,
+    X_background: pd.DataFrame,
+    X_eval: pd.DataFrame,
+    max_display: int = 15,
+    clip_range: tuple = (-2e-5, 1.5e-5),
+    plot_title: str = "SHAP Feature Impact on Model Output"
+) -> tuple[shap.TreeExplainer, shap.Explanation]:
+    """
+    Returns SHAP TreeExplainer and Explanation object, and plots bar (optional) + beeswarm charts.
+    Supports sklearn.pipeline.Pipeline by extracting the final model automatically.
+    """
+    # extract the model
+    model = pipeline.steps[-1][1]
+
+    # create explainer
+    explainer = shap.TreeExplainer(
+        model,
+        data=X_background,
+        feature_perturbation="interventional"
+    )
+    shap_exp = explainer(X_eval)
+
+    if max_display > 0:
+        shap_values_clipped = np.clip(shap_exp.values, clip_range[0], clip_range[1])
+        shap_exp.values = shap_values_clipped
+
+        # plot bar chart
+        # shap.plots.bar(shap_exp, max_display=max_display)
+
+        # plot beeswarm chart
+        shap.summary_plot(shap_values_clipped, X_eval, max_display=max_display, show=False)
+        plt.title(plot_title, fontsize=14)
+        plt.gcf().set_size_inches(12, 6)
+        plt.tight_layout()
+        plt.show()
+
+    return explainer, shap_exp
+
+def explain_shap_xgb(
+    model: xgb.Booster,
+    X_background: pd.DataFrame,
+    X_eval: pd.DataFrame,
+    max_display: int = 15,
+    clip_range: tuple = (-2e-5, 1.5e-5),
+    plot_title: str = "SHAP Feature Impact on Model Output"
+) -> tuple[shap.TreeExplainer, shap.Explanation]:
+    """
+    Returns SHAP TreeExplainer and Explanation object, and plots bar (optional) + beeswarm charts.
+    Supports sklearn.pipeline.Pipeline by extracting the final model automatically.
+    """
+    # explainer = shap.TreeExplainer(model, data=X_test_sample,)
+    # shap_exp = explainer(X_eval)
+
+    explainer = shap.TreeExplainer(
+        model,
+        data=X_background,
+        feature_perturbation="interventional"
+    )
+    shap_exp = explainer(X_eval)
+    
+    if max_display > 0:
+        shap_values_clipped = np.clip(shap_exp.values, clip_range[0], clip_range[1])
+        shap_exp.values = shap_values_clipped
+
+        # plot bar chart
+        # shap.plots.bar(shap_exp, max_display=max_display)
+
+        # plot beeswarm chart
+        shap.summary_plot(shap_values_clipped, X_eval, max_display=max_display, show=False)
+        plt.title(plot_title, fontsize=14)
+        plt.gcf().set_size_inches(12, 6)
+        plt.tight_layout()
+        plt.show()
+
+    return explainer, shap_exp
+
+# ========== SHAP-based Approximate Elasticity Computation ==========
+
+def compute_elasticities_shap_rf(
+    pipeline: Pipeline,
+    shap_exp: shap.Explanation,
+    low_q: float = 0.25,
+    high_q: float = 0.75
+) -> pd.DataFrame:
+    """
+    Estimates elasticity coefficients for each feature using:
+    eᵢ = medianₘ [(ϕᵢₘ / ŷₘ) * (xᵢₘ / Δxᵢ)],
+    where Δxᵢ is the interquartile range.
+    """
+    # 1. Extract data and SHAP values
+    X = pd.DataFrame(shap_exp.data, columns=shap_exp.feature_names)
+    shap_vals = shap_exp.values
+    y_hat = pipeline.predict(X.values)
+
+    # 2. build a boolean mask: keep rows with finite values everywhere
+    mask = (
+        np.isfinite(y_hat) &
+        np.isfinite(shap_vals).all(axis=1) &
+        np.isfinite(X).all(axis=1)
+    )
+    X = X.loc[mask].reset_index(drop=True)
+    shap_vals = shap_vals[mask]
+    y_hat = y_hat[mask]
+
+    # 3. Compute interquartile range for each feature
+    qs = X.quantile([low_q, high_q])
+    dx = qs.loc[high_q] - qs.loc[low_q]
+    dx.replace(0, 1e-8, inplace=True)            # avoid /0
+    dx.fillna(1e-8, inplace=True)                # avoid NaN
+
+    # 4. Compute relative elasticities
+    rels = (shap_vals / y_hat[:, None]) * (X.values / dx.values[None, :])
+
+    # 5. Construct elasticity summary DataFrame
+    elas = pd.DataFrame({
+        "feature": X.columns,
+        "median_elasticity": np.median(rels, axis=0),
+        "p10": np.percentile(rels, 10, axis=0),
+        "p90": np.percentile(rels, 90, axis=0),
+    })
+
+    return elas.sort_values("median_elasticity", ascending=False)
+
+
+def compute_elasticities_shap_xgb(
+    model: xgb.Booster,
+    shap_exp: shap.Explanation,
+    low_q: float = 0.25,
+    high_q: float = 0.75
+) -> pd.DataFrame:
+    """
+    Estimates elasticity coefficients for each feature using:
+    eᵢ = medianₘ [(ϕᵢₘ / ŷₘ) * (xᵢₘ / Δxᵢ)],
+    where Δxᵢ is the interquartile range.
+    """
+    # 1. Extract data and SHAP values
+    X = pd.DataFrame(shap_exp.data, columns=shap_exp.feature_names)
+    shap_vals = shap_exp.values
+
+    dmatrix = xgb.DMatrix(X, feature_names=list(X.columns))
+    y_hat = model.predict(dmatrix)
+
+    # 2. build a boolean mask: keep rows with finite values everywhere
+    mask = (
+        np.isfinite(y_hat) &
+        np.isfinite(shap_vals).all(axis=1) &
+        np.isfinite(X).all(axis=1)
+    )
+    X = X.loc[mask].reset_index(drop=True)
+    shap_vals = shap_vals[mask]
+    y_hat = y_hat[mask]
+
+    # 3. Compute interquartile range for each feature
+    qs = X.quantile([low_q, high_q])
+    dx = qs.loc[high_q] - qs.loc[low_q]
+    dx.replace(0, 1e-8, inplace=True)            # avoid /0
+    dx.fillna(1e-8, inplace=True)                # avoid NaN
+
+    # 4. Compute relative elasticities
+    rels = (shap_vals / y_hat[:, None]) * (X.values / dx.values[None, :])
+
+    # 5. Construct elasticity summary DataFrame
+    elas = pd.DataFrame({
+        "feature": X.columns,
+        "median_elasticity": np.median(rels, axis=0),
+        "p10": np.percentile(rels, 10, axis=0),
+        "p90": np.percentile(rels, 90, axis=0),
+    })
+
+    return elas.sort_values("median_elasticity", ascending=False)
+
+
