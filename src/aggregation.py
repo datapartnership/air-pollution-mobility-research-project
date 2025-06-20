@@ -502,84 +502,66 @@ def aggregate_landcover_to_mesh(
     print(f"[Saved] {output_layer} written to: {mesh_path}")
 
 
-
 import os
-import re
-from pathlib import Path
 import geopandas as gpd
 import rasterio
-import numpy as np
-from rasterstats import zonal_stats
+import rasterstats
+from pathlib import Path
 from tqdm import tqdm
 
-def batch_aggregate_LST(
-    tiff_folder: Path,
-    mesh_folder: Path,
-    batch_size: int = 50
-):
+def batch_aggregate_LST(tiff_folder: Path, mesh_folder: Path, batch_size: int = 50):
     """
-    Batch aggregate daily LST raster files to the corresponding mesh file.
+    Batch aggregate LST TIFF files into corresponding daily mesh GPKG files.
 
-    Parameters
-    ----------
-    tiff_folder : Path
-        Folder containing filled daily LST GeoTIFFs.
-    mesh_folder : Path
-        Folder to save GPKG files containing aggregated mesh-level LST data.
-    batch_size : int
-        Number of files to process in one batch (not strictly used here, but can be extended).
+    Parameters:
+    - tiff_folder (Path): folder containing LST GeoTIFFs (renamed to city-YYYY-MM-DD.tif)
+    - mesh_folder (Path): folder containing corresponding GPKG mesh files
+    - batch_size (int): number of TIFFs to process in one batch
     """
-    import geopandas as gpd
-    import rasterstats
-    from tqdm import tqdm
-    import re
+    if not isinstance(tiff_folder, Path):
+        tiff_folder = Path(tiff_folder)
+    if not isinstance(mesh_folder, Path):
+        mesh_folder = Path(mesh_folder)
 
-    tif_files = sorted([f for f in os.listdir(tiff_folder) if f.endswith(".tif")])
-    mesh_sample = next(iter(mesh_folder.glob("*.gpkg")), None)
+    tif_files = sorted([f for f in tiff_folder.glob("*.tif") if "-" in f.name])
+    print(f"📦 Found {len(tif_files)} TIFF files to process")
 
-    if mesh_sample is None:
-        raise FileNotFoundError("No mesh file found in mesh_folder.")
+    for i in tqdm(range(0, len(tif_files), batch_size)):
+        batch = tif_files[i:i+batch_size]
 
-    city = mesh_sample.stem.split("-")[0]
-    print(f"Detected city: {city}")
+        for tif in batch:
+            try:
+                date_str = tif.stem.split("-")[-3:]  # ['2023', '01', '01']
+                date_str = "-".join(date_str)
+                city = "-".join(tif.stem.split("-")[:-3])
+                gpkg_path = mesh_folder / f"{city}-{date_str}.gpkg"
 
-    for tif_file in tqdm(tif_files):
-        match = re.search(r"(\d{4}-\d{2}-\d{2})", tif_file)
-        if not match:
-            print(f"⚠️  Cannot extract date from {tif_file}, skipping.")
-            continue
+                if not gpkg_path.exists():
+                    print(f"❌ Missing mesh file: {gpkg_path.name}, skipping.")
+                    continue
 
-        date_str = match.group(1)
-        tif_path = tiff_folder / tif_file
-        mesh_path = mesh_folder / f"{city}-{date_str}.gpkg"
+                # Read mesh
+                mesh = gpd.read_file(gpkg_path, layer=0)
+                if mesh.empty:
+                    print(f"❌ Empty mesh in: {gpkg_path.name}, skipping.")
+                    continue
 
-        if not mesh_path.exists():
-            print(f"No mesh file found for {tif_file}, skipping.")
-            continue
+                # Compute zonal mean
+                zs = rasterstats.zonal_stats(
+                    vectors=mesh["geometry"],
+                    raster=str(tif),
+                    stats=["mean"],
+                    nodata=0,
+                    geojson_out=False
+                )
 
-        try:
-            stats = rasterstats.zonal_stats(
-                mesh_path,
-                tif_path,
-                stats="mean",
-                geojson_out=True,
-                nodata=0
-            )
-            gdf = gpd.GeoDataFrame.from_features(stats)
-            gdf.rename(columns={"mean": "LST_day_mean"}, inplace=True)
+                mesh["LST_day_mean"] = [item["mean"] for item in zs]
+                mesh = mesh.dropna(subset=["LST_day_mean"])
 
-            # Drop other geometry columns if accidentally added
-            for col in gdf.columns:
-                if col.startswith("geometry") and col != "geometry":
-                    gdf = gdf.drop(columns=[col])
-            gdf.set_geometry("geometry", inplace=True)
-
-            # Overwrite to GPKG file
-            gdf.to_file(mesh_path, layer="LST_day", driver="GPKG")
-        except Exception as e:
-            print(f"❌ Failed processing {tif_file}: {e}")
-
-
+                # Write to new layer in same GPKG
+                mesh.to_file(gpkg_path, layer="LST_day", driver="GPKG")
+            except Exception as e:
+                print(f"❌ Failed to process {tif.name}: {e}")
 
         
 

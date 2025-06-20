@@ -8,6 +8,8 @@ import numpy as np
 import rasterio
 from rasterio.io import DatasetReader
 from scipy.ndimage import generic_filter
+import re
+
 
 
 def read_tiff(
@@ -402,65 +404,77 @@ def fill_cloud_missing_data(
             filled_band = np.where(np.isnan(band_filled), nodata_value, band_filled)
             dst.write(filled_band.astype(profile['dtype']), 1)
 
-import os
-from pathlib import Path
+
+import numpy as np
 import rasterio
 from rasterio.enums import Resampling
-import numpy as np
+from pathlib import Path
 from scipy.ndimage import generic_filter
+import os
+from tqdm import tqdm
 
 def fill_surface_temperature_data(
     city: str,
     data_tiff_path: Path,
-    output_path: Path
-) -> None:
+    output_path: Path,
+    max_iterations: int = 100,
+    filter_size: int = 3
+):
     """
-    Fill missing surface temperature data in TIFFs using 3x3 mean filter.
+    Fill missing values in LST raster files using mean of nearby valid pixels.
 
     Parameters
     ----------
     city : str
-        Name of the city (used for naming output files).
+        City name used for naming output directory.
     data_tiff_path : Path
-        Path to folder containing raw TIFF files.
+        Folder containing clipped LST raster TIFFs.
     output_path : Path
-        Folder to save filled TIFF files.
+        Where to store the filled TIFFs.
+    max_iterations : int
+        Maximum number of iterations for filling nodata.
+    filter_size : int
+        Size of the square window to compute mean filter (must be odd).
     """
-    output_folder = output_path / f"{city}-LST-filled"
-    output_folder.mkdir(parents=True, exist_ok=True)
+    data_tiff_path = Path(data_tiff_path)
+    output_path = Path(output_path)
 
-    for tif in sorted(os.listdir(data_tiff_path)):
-        if not tif.endswith(".tif"):
-            continue
+    out_dir = output_path / f"{city}-LST-filled"
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-        in_path = data_tiff_path / tif
+    tiff_files = sorted(data_tiff_path.glob("*.tif"))
+    print(f"🔁 Filling LST nodata for {len(tiff_files)} files...")
 
-        with rasterio.open(in_path) as src:
-            arr = src.read(1).astype(float)
+    for tif in tqdm(tiff_files):
+        with rasterio.open(tif) as src:
+            arr = src.read(1)
+            meta = src.meta.copy()
             nodata = src.nodata
-
             if nodata is None:
-                nodata = -9999  # default fallback
-                print(f"Warning: {tif} has no nodata, using {nodata}")
+                nodata = -9999
+                meta.update({"nodata": nodata})
 
-            arr[arr == nodata] = np.nan
+        filled = arr.copy().astype(np.float32)
+        filled[filled == nodata] = np.nan
 
-            def mode_filter(vals):
-                if np.all(np.isnan(vals)):
-                    return nodata
-                return np.nanmean(vals)
+        def nanmean_filter(values):
+            vals = values[~np.isnan(values)]
+            return np.nanmean(vals) if vals.size > 0 else np.nan
 
-            filled = generic_filter(arr, mode_filter, size=3, mode='constant', cval=np.nan)
+        for _ in range(max_iterations):
+            mask = np.isnan(filled)
+            if not np.any(mask):
+                break
+            filled = generic_filter(filled, nanmean_filter, size=filter_size, mode="nearest")
 
-            out_meta = src.meta.copy()
-            out_meta.update({"nodata": nodata})
+        filled[np.isnan(filled)] = nodata
 
-        out_path = output_folder / (tif.replace(".tif", "_filled.tif"))
+        out_meta = meta.copy()
+        out_path = out_dir / tif.name
+        with rasterio.open(out_path, "w", **out_meta) as dst:
+            dst.write(filled.astype(meta["dtype"]), 1)
 
-        with rasterio.open(out_path, 'w', **out_meta) as dst:
-            dst.write(np.where(np.isnan(filled), nodata, filled).astype(out_meta['dtype']), 1)
-
-        print(f"Filled: {out_path.name}")
+    print(f"✅ Surface temperature filling complete for {len(tiff_files)} files in: {out_dir}")
 
 
 
@@ -514,3 +528,74 @@ def fill_landcover_data(input_tiff_path, output_tiff_path, default_nodata=255, b
     # Save filled raster
     with rasterio.open(output_tiff_path, "w", **profile) as dst:
         dst.write(filled, 1)
+
+from pathlib import Path
+import numpy as np
+import rasterio
+from rasterio.enums import Resampling
+from scipy.ndimage import generic_filter
+import re
+
+def iterative_fill_surface_temperature_data(
+    city: str,
+    data_tiff_path: Path,
+    output_path: Path,
+    max_iterations: int = 50,
+    filter_size: int = 5
+):
+    """
+    Iteratively fill missing values (nodata) in surface temperature TIFFs.
+
+    Parameters
+    ----------
+    city : str
+        City name used for naming the output folder.
+    data_tiff_path : Path
+        Path to folder containing input TIFFs with missing values.
+    output_path : Path
+        Folder to save filled TIFFs.
+    max_iterations : int
+        Maximum number of filter iterations.
+    filter_size : int
+        Window size for neighborhood filter.
+    """
+    input_folder = Path(data_tiff_path)
+    tif_files = sorted(list(input_folder.glob("*.tif")))
+    if not tif_files:
+        print("No input TIFFs found.")
+        return
+
+    filled_folder = output_path / f"{city}-LST-filled"
+    filled_folder.mkdir(parents=True, exist_ok=True)
+
+    print(f"🔁 Starting iterative filling for {len(tif_files)} files...")
+
+    def nanmean_filter(values):
+        valid = values[~np.isnan(values)]
+        return np.mean(valid) if valid.size > 0 else np.nan
+
+    for tif_file in tif_files:
+        with rasterio.open(tif_file) as src:
+            arr = src.read(1).astype(float)
+            nodata = src.nodata if src.nodata is not None else -9999
+            arr[arr == nodata] = np.nan
+            meta = src.meta.copy()
+            meta.update({"nodata": nodata})
+
+        filled = arr.copy()
+        for _ in range(max_iterations):
+            filled_new = generic_filter(filled, nanmean_filter, size=filter_size, mode='constant', cval=np.nan)
+            filled[np.isnan(filled)] = filled_new[np.isnan(filled)]
+            if np.isnan(filled).sum() == 0:
+                break
+
+        match = re.search(r"(\d{4})[-_](\d{2})[-_](\d{2})", tif_file.name)
+        date_str = f"{match.group(1)}-{match.group(2)}-{match.group(3)}" if match else tif_file.stem
+        out_name = f"{city}_LST_{date_str}_filled.tif"
+        out_path = filled_folder / out_name
+
+        with rasterio.open(out_path, "w", **meta) as dst:
+            dst.write(np.nan_to_num(filled, nan=nodata).astype(meta["dtype"]), 1)
+
+    print(f"✅ Iterative filling complete. Files saved to: {filled_folder}")
+    return filled_folder
