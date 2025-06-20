@@ -5,6 +5,7 @@ import fiona
 from pathlib import Path
 import os
 
+from tqdm import tqdm
 def merge_multiple_gpkgs(
         feature_mesh_paths: list[Path], 
         output_folder: Path
@@ -26,15 +27,15 @@ def merge_multiple_gpkgs(
 
     Example usage
     --------------
-    `DATA_PATH = Path("your/data/root/path")`
+    >>> DATA_PATH = Path("your/data/root/path")
 
-    `feature_mesh_paths = [DATA_PATH / "addis-no2-mesh-data", DATA_PATH / "addis-OSM-mesh-data", DATA_PATH / "addis-pop-mesh-data"]`
+    >>> feature_mesh_paths = [DATA_PATH / "addis-no2-mesh-data", DATA_PATH / "addis-OSM-mesh-data", DATA_PATH / "addis-pop-mesh-data"]
 
-    `output_folder = DATA_PATH / "addis-mesh-data"`
+    >>> output_folder = DATA_PATH / "addis-mesh-data"
 
-    `output_folder.mkdir(exist_ok=True)`
+    >>> output_folder.mkdir(exist_ok=True)
     
-    `merge_multiple_gpkgs(feature_mesh_paths, output_folder)`
+    >>> merge_multiple_gpkgs(feature_mesh_paths, output_folder)
         
     """
 
@@ -44,7 +45,7 @@ def merge_multiple_gpkgs(
     # Get list of file names from the first directory (assume same files in all)
     file_names = [f.name for f in feature_mesh_paths[0].glob("*.gpkg")]
 
-    for file_name in file_names:
+    for file_name in tqdm(file_names, desc="Progress", total=len(file_names)):
         gdf_list = []
 
         for folder in feature_mesh_paths:
@@ -701,3 +702,138 @@ def clip_raster_with_shapefile(input_tiff, shapefile, output_tiff, nodata_value=
     # Save clipped raster
     with rasterio.open(output_tiff, "w", **out_meta) as dest:
         dest.write(out_image)
+
+
+
+import geopandas as gpd
+def gpkg_2_shp(gpkg_root, shp_name):
+    """
+    Change gpkg file to shp file to assist ArcGIS visualization
+    """
+    gdf = gpd.read_file(gpkg_root)
+    gdf.to_file(gpkg_root / shp_name, driver="ESRI Shapefile")
+
+
+
+import re
+from tqdm import tqdm
+# Function: Aggregate and write aggregated values to multiple meshes
+def write_single_column_to_new_mesh(
+        folder_path:Path, 
+        empty_mesh_path: Path,
+        old_name: str,
+        new_name: str,
+        old_layer_name: str, 
+        layer_name: str)-> None :
+    """
+    Iterate through all GPKG files in the specified folder, updating mesh files with data columns extracted from time-series GPKG files.
+
+    1. Extract the date from the filename.
+    2. Find the corresponding empty mesh file in another folder that contains the same date in its filename.
+    3. Read the specified layer from the original GPKG file and extract the column named `old_name`.
+    4. Assign the extracted column values to the `new_name` column of the matched empty mesh file.
+    5. Save the updated mesh file with the specified `layer_name`.
+
+    Parameters
+    ----------
+    folder_path : Path
+        Path to the folder containing source GPKG files. Filenames must include a date string in the format 'YYYY-MM-DD', e.g. 'addis-ababa-2023-01-02.gpkg'.
+    empty_mesh_path : Path
+        Path to the folder containing empty mesh GPKG files. Filenames should also contain date strings to allow matching.
+    old_name : str
+        The column name to extract from the source GPKG files.
+    new_name : str
+        The column name to assign in the empty mesh files.
+    old_layer_name : str
+        The layer name to read from the source GPKG files, must be known to make sure successfully load the layer.
+    layer_name : str
+        The layer name to write in the new mesh files.
+
+    Returns
+    -------
+    None
+
+    Example
+    -----
+    >>> folder_path = DATA_PATH / '1'
+    >>> empty_mesh_path = DATA_PATH / 'addis-temp-mesh-data'
+    >>> old_name = 'LST_day_mean'
+    >>> new_name = 'temp_mean'
+    >>> old_layer_name = 'LST_day'
+
+
+    >>> write_single_column_to_new_mesh(
+                        folder_path=folder_path, 
+                        empty_mesh_path=empty_mesh_path, 
+                        old_name=old_name, 
+                        new_name=new_name, 
+                        old_layer_name=old_layer_name, 
+                        layer_name = lyr_addis_name)
+    """
+
+    
+    gpkg_files = [f for f in folder_path.glob("*gpkg")]
+    abs_file_paths = [folder_path / f for f in gpkg_files] # absolute path
+    n_task = len(gpkg_files)
+    
+    for index, abs_path in tqdm(enumerate(abs_file_paths), desc="Processing GPKG files: ", total = n_task):
+
+        filename = abs_path.name
+        match = re.search(r"\d{4}-\d{2}-\d{2}", filename)
+        if match:
+            date = match.group()
+        else:
+            print(f"Warning: can't find date in filename {filename}")
+            continue
+
+        try:
+            old_mesh = gpd.read_file(abs_path, layer = old_layer_name)
+            matched_mesh =  [f for f in empty_mesh_path.glob("*.gpkg") if date in f.name][0]  # typically only one match， absolute path
+            
+            new_mesh = gpd.read_file(matched_mesh)
+            new_mesh[new_name] = old_mesh[old_name]
+            new_mesh.to_file(matched_mesh, driver='GPKG', layer=layer_name, mode='w')
+
+
+        except Exception as e:
+            print(f"Error processing {abs_path} at index {index}: {e}")
+            print("Skipping to next file...")
+            continue
+
+
+
+from pathlib import Path
+from datetime import datetime, timedelta
+import geopandas as gpd
+import pandas as pd
+from tqdm import tqdm
+
+def convert_gpkgs_to_parquet(mesh_folder: Path, output_path: Path, file_name: str) -> None:
+    """
+    Load multiple GeoPackage files from a folder, assign sequential dates starting from 2023-01-01,
+    concatenate them into a single GeoDataFrame, and save the result as a parquet file.
+
+    Parameters:
+        mesh_folder (Path): Path to the folder containing GeoPackage (.gpkg) files.
+        output_path (Path): Directory path where the parquet file will be saved.
+        file_name (str): Name of the output parquet file (without extension).
+
+    Returns:
+        None
+
+    Side Effects:
+        Saves the concatenated GeoDataFrame to '{output_path}/{file_name}.parquet' 
+        using the PyArrow engine with Snappy compression.
+    """
+
+    file_paths = sorted(mesh_folder.glob("*.gpkg"))
+    all_data = []
+
+    for i, path in tqdm(enumerate(file_paths), total=len(file_paths)):
+        date = datetime(2023, 1, 1) + timedelta(days=i)
+        gdf = gpd.read_file(path)
+        gdf["date"] = date
+        all_data.append(gdf)
+
+    full_df = pd.concat(all_data, ignore_index=True)
+    full_df.to_parquet(output_path / f"{file_name}.parquet", engine="pyarrow", compression="snappy")

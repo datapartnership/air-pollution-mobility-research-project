@@ -261,3 +261,81 @@ def plot_xgb_feature_importance(model, features, importance_type:str = 'weight')
     plt.title("XGBoost Feature Importance")
     plt.tight_layout()
     plt.show()
+
+
+import warnings
+from datetime import timedelta
+from libpysal.weights import KNN
+
+def add_lag_features(full_df, output_path: Path, file_name: str, k_neighbors=8) -> None:
+    """
+    Add lagged NO2 features to the DataFrame by performing the following steps:
+
+    1. Calculate the previous day's NO2 values for each location (geom_id).
+    2. Compute the previous day's average NO2 values of spatial neighbors for each location.
+    3. Save the resulting DataFrame with these new features as a _parquet_ file.
+
+    Parameters:
+        full_df (pd.DataFrame): 
+            DataFrame containing at least ['geom_id', 'date', 'no2_mean'] columns.
+        output_path (Path): 
+            Directory where the output parquet file will be saved.
+        file_name (str): 
+            Name of the output parquet file (without extension).
+        k_neighbors (int, optional): 
+            Number of spatial neighbors to consider for lag calculation. Default is 8.
+
+    Returns:
+        pd.DataFrame: 
+            The input DataFrame with two new columns added:
+            'no2_lag1' - previous day's NO2 value for the same geom_id,
+            'no2_neighbor_lag1' - previous day's average NO2 of spatial neighbors.
+
+    Side Effects:
+        Saves the augmented DataFrame to '{output_path}/{file_name}.parquet' 
+        using PyArrow engine with Snappy compression.
+    """
+
+    # Sort DataFrame by geom_id and date
+    full_df = full_df.sort_values(["geom_id", "date"]).copy()
+
+    # Add previous day's no2_mean for each geom_id
+    full_df["no2_lag1"] = full_df.groupby("geom_id")["no2_mean"].shift(1)
+
+    # Use the earliest date's data to construct neighbor relationships
+    sample_gdf = full_df[full_df['date'] == full_df['date'].min()].reset_index(drop=True)
+
+    # Suppress warnings from libpysal
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        w = KNN.from_dataframe(sample_gdf, k=k_neighbors)
+
+    w.transform = 'r'  # Row-standardization
+
+    # Create a mapping from geom_id to its neighbors' geom_ids
+    index_to_geom_id = dict(sample_gdf['geom_id'].items())
+    geom_id_to_neighbors = {
+        index_to_geom_id[i]: [index_to_geom_id[j] for j in neighbors]
+        for i, neighbors in w.neighbors.items()
+    }
+
+    # Create a dictionary of DataFrames grouped by date for quick access
+    df_by_date = {d: gdf for d, gdf in full_df.groupby("date")}
+
+    def compute_neighbor_no2(row):
+        date = row["date"]
+        geom_id = row["geom_id"]
+        prev_date = date - timedelta(days=1)
+        if prev_date not in df_by_date:
+            return None
+        prev_day_df = df_by_date[prev_date]
+        neighbors = geom_id_to_neighbors.get(geom_id, [])
+        values = prev_day_df[prev_day_df["geom_id"].isin(neighbors)]["no2_mean"]
+        return values.mean() if not values.empty else None
+
+    # Calculate previous day's mean NO2 for neighboring locations
+    full_df["no2_neighbor_lag1"] = full_df.apply(compute_neighbor_no2, axis=1)
+
+    full_df.to_parquet(output_path / f"{file_name}.parquet", engine="pyarrow", compression="snappy")
+
+    return full_df
