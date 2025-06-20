@@ -5,6 +5,7 @@ import fiona
 from pathlib import Path
 import os
 
+from tqdm import tqdm
 def merge_multiple_gpkgs(
         feature_mesh_paths: list[Path], 
         output_folder: Path
@@ -26,15 +27,15 @@ def merge_multiple_gpkgs(
 
     Example usage
     --------------
-    `DATA_PATH = Path("your/data/root/path")`
+    >>> DATA_PATH = Path("your/data/root/path")
 
-    `feature_mesh_paths = [DATA_PATH / "addis-no2-mesh-data", DATA_PATH / "addis-OSM-mesh-data", DATA_PATH / "addis-pop-mesh-data"]`
+    >>> feature_mesh_paths = [DATA_PATH / "addis-no2-mesh-data", DATA_PATH / "addis-OSM-mesh-data", DATA_PATH / "addis-pop-mesh-data"]
 
-    `output_folder = DATA_PATH / "addis-mesh-data"`
+    >>> output_folder = DATA_PATH / "addis-mesh-data"
 
-    `output_folder.mkdir(exist_ok=True)`
+    >>> output_folder.mkdir(exist_ok=True)
     
-    `merge_multiple_gpkgs(feature_mesh_paths, output_folder)`
+    >>> merge_multiple_gpkgs(feature_mesh_paths, output_folder)
         
     """
 
@@ -44,7 +45,7 @@ def merge_multiple_gpkgs(
     # Get list of file names from the first directory (assume same files in all)
     file_names = [f.name for f in feature_mesh_paths[0].glob("*.gpkg")]
 
-    for file_name in file_names:
+    for file_name in tqdm(file_names, desc="Progress", total=len(file_names)):
         gdf_list = []
 
         for folder in feature_mesh_paths:
@@ -559,3 +560,368 @@ def specific_date(start_date: str, end_date: str, time_resolution: str = 'D') ->
         .tolist()
     )
     return dates
+
+def clip_raster_with_shapefile_vrt(input_tiff_list, shapefile, output_tiff, nodata_value=255):
+    """
+    Merge multiple TIFFs into a VRT and clip it using shapefile boundary
+    """
+    from rasterio.merge import merge
+    import rasterio
+    from rasterio.mask import mask
+    import geopandas as gpd
+
+    src_files_to_mosaic = [rasterio.open(str(tif)) for tif in input_tiff_list]
+    mosaic, transform = merge(src_files_to_mosaic)
+    meta = src_files_to_mosaic[0].meta.copy()
+    meta.update({
+        "driver": "GTiff",
+        "height": mosaic.shape[1],
+        "width": mosaic.shape[2],
+        "transform": transform,
+        "nodata": nodata_value
+    })
+
+    shapes = gpd.read_file(shapefile)
+    geometry = [shapes.geometry.iloc[0].__geo_interface__]
+
+    with rasterio.open(output_tiff, "w", **meta) as dst:
+        dst.write(mosaic)
+
+    with rasterio.open(output_tiff) as src:
+        out_image, out_transform = mask(src, geometry, crop=True, nodata=nodata_value)
+        out_meta = src.meta.copy()
+        out_meta.update({
+            "height": out_image.shape[1],
+            "width": out_image.shape[2],
+            "transform": out_transform,
+            "nodata": nodata_value
+        })
+
+    with rasterio.open(output_tiff, "w", **out_meta) as dest:
+        dest.write(out_image)
+
+import os
+from pathlib import Path
+import re
+
+def revert_tiff_filenames_to_match_mesh(tiff_folder: Path) -> None:
+    """
+    Rename filled TIFF files to match mesh naming convention: city-YYYY-MM-DD.tif
+
+    Example:
+    From: addis-ababa_LST_2023-01-01_filled.tif
+    To:   addis-ababa-2023-01-01.tif
+
+    Parameters:
+    - tiff_folder (Path): folder containing filled TIFF files
+    """
+    if not isinstance(tiff_folder, Path):
+        tiff_folder = Path(tiff_folder)
+
+    tif_files = list(tiff_folder.glob("*_filled.tif"))
+    renamed = 0
+
+    for tif in tif_files:
+        match = re.search(r"(.+)_LST_(\d{4}-\d{2}-\d{2})_filled\.tif", tif.name)
+        if match:
+            city = match.group(1)
+            date_str = match.group(2)
+            new_name = f"{city}-{date_str}.tif"
+            new_path = tif.parent / new_name
+            tif.rename(new_path)
+            renamed += 1
+        else:
+            print(f" Cannot extract date from {tif.name}, skipping.")
+
+    print(f"Renamed {renamed} TIFF files to standard format.")
+
+
+import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap, BoundaryNorm
+import numpy as np
+
+def get_esa_landcover_colormap():
+    """
+    Returns ESA WorldCover 2021 class values, names, colormap, and normalization object.
+
+    Returns
+    -------
+    class_values : list of int
+        ESA land cover class values.
+    class_names : list of str
+        Human-readable names for each class.
+    cmap : ListedColormap
+        Colormap object for visualization.
+    norm : BoundaryNorm
+        Normalization object matching class values to color bins.
+    """
+
+    class_values = [
+        10, 20, 30, 40, 50, 60, 70, 80,
+        90, 95, 100, 111, 112, 113
+    ]
+
+    class_names = [
+        "Tree cover", "Shrubland", "Grassland", "Cropland",
+        "Built-up", "Bare/sparse vegetation", "Snow and ice", "Water bodies",
+        "Wetlands", "Mangroves", "Moss and lichen", "Permanent snow", "Glaciers", "Others"
+    ]
+
+    class_colors = [
+        "#006400",  # 10 Tree cover (dark green)
+        "#ffbb22",  # 20 Shrubland (light brown)
+        "#ffff4c",  # 30 Grassland (yellow)
+        "#f096ff",  # 40 Cropland (pink)
+        "#fa0000",  # 50 Built-up (red)
+        "#b4b4b4",  # 60 Sparse vegetation (gray)
+        "#f0f0f0",  # 70 Snow and ice (white)
+        "#0064c8",  # 80 Water bodies (blue)
+        "#0096a0",  # 90 Wetlands (teal)
+        "#00cf75",  # 95 Mangroves (greenish)
+        "#fae6a0",  # 100 Moss and lichen (beige)
+        "#dcdcdc",  # 111 Permanent snow (light gray)
+        "#b0e0e6",  # 112 Glaciers (pale blue)
+        "#a0a0a0",  # 113 Others/unclassified
+    ]
+
+    cmap = ListedColormap(class_colors)
+    norm = BoundaryNorm(class_values + [114], cmap.N)
+
+    return class_values, class_names, cmap, norm
+
+import rasterio
+from rasterio.mask import mask
+import geopandas as gpd
+from shapely.geometry import mapping
+
+def clip_raster_with_shapefile(input_tiff, shapefile, output_tiff, nodata_value=255):
+    """
+    Clip a raster TIFF file using the geometry of a shapefile.
+
+    Parameters
+    ----------
+    input_tiff : Path
+        Path to the input raster TIFF file.
+    shapefile : Path
+        Path to the shapefile used for clipping.
+    output_tiff : Path
+        Path to save the clipped raster.
+    nodata_value : int or float, optional
+        Value to assign to nodata areas in the output raster. Default is 255.
+    """
+    # Load shapefile geometry
+    shapes = gpd.read_file(shapefile)
+    geometry = [mapping(shapes.geometry.iloc[0])]
+
+    with rasterio.open(input_tiff) as src:
+        out_image, out_transform = mask(src, geometry, crop=True, nodata=nodata_value)
+        out_meta = src.meta.copy()
+
+    # Update metadata for the output raster
+    out_meta.update({
+        "driver": "GTiff",
+        "height": out_image.shape[1],
+        "width": out_image.shape[2],
+        "transform": out_transform,
+        "nodata": nodata_value
+    })
+
+    # Save clipped raster
+    with rasterio.open(output_tiff, "w", **out_meta) as dest:
+        dest.write(out_image)
+
+
+from rasterio.mask import mask
+from shapely.geometry import box, mapping
+from pathlib import Path
+import rasterio
+import os
+
+def clip_tiff_with_bbox(city, data_tiff_path, output_path,
+                        min_lon, min_lat, max_lon, max_lat):
+    """
+    Clip all GeoTIFF files in a folder using a bounding box and save them 
+    into a structured output folder specific to LST.
+
+    Parameters:
+    - city (str): city name (used in naming output folder)
+    - data_tiff_path (Path): folder containing input GeoTIFFs
+    - output_path (Path): folder to save clipped GeoTIFFs
+    - min_lon, min_lat, max_lon, max_lat (float): bounding box coordinates
+
+    Returns:
+    - Path: folder containing all clipped GeoTIFFs
+    """
+    if not isinstance(data_tiff_path, Path):
+        data_tiff_path = Path(data_tiff_path)
+    if not isinstance(output_path, Path):
+        output_path = Path(output_path)
+
+    tiff_files = sorted(data_tiff_path.glob("*.tif"))
+    if not tiff_files:
+        print(f"⚠️ No TIFF files found in {data_tiff_path}")
+        return None
+
+    output_dir = output_path / f"{city}-LST-clipped"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    bbox = box(min_lon, min_lat, max_lon, max_lat)
+    geo = [mapping(bbox)]
+
+    for idx, tif in enumerate(tiff_files, 1):
+        print(f"📦 Clipping {idx}/{len(tiff_files)}: {tif.name}")
+        try:
+            with rasterio.open(tif) as src:
+                out_image, out_transform = mask(src, geo, crop=True)
+                out_meta = src.meta.copy()
+
+            out_meta.update({
+                "driver": "GTiff",
+                "height": out_image.shape[1],
+                "width": out_image.shape[2],
+                "transform": out_transform
+            })
+
+            out_tif_path = output_dir / tif.name
+            with rasterio.open(out_tif_path, "w", **out_meta) as dest:
+                dest.write(out_image)
+        except Exception as e:
+            print(f"❌ Failed to clip {tif.name}: {e}")
+
+    print(f"✅ All clipped TIFF files saved to {output_dir}")
+    return output_dir
+
+
+import geopandas as gpd
+def gpkg_2_shp(gpkg_root, shp_name):
+    """
+    Change gpkg file to shp file to assist ArcGIS visualization
+    """
+    gdf = gpd.read_file(gpkg_root)
+    gdf.to_file(gpkg_root / shp_name, driver="ESRI Shapefile")
+
+
+
+import re
+from tqdm import tqdm
+# Function: Aggregate and write aggregated values to multiple meshes
+def write_single_column_to_new_mesh(
+        folder_path:Path, 
+        empty_mesh_path: Path,
+        old_name: str,
+        new_name: str,
+        old_layer_name: str, 
+        layer_name: str)-> None :
+    """
+    Iterate through all GPKG files in the specified folder, updating mesh files with data columns extracted from time-series GPKG files.
+
+    1. Extract the date from the filename.
+    2. Find the corresponding empty mesh file in another folder that contains the same date in its filename.
+    3. Read the specified layer from the original GPKG file and extract the column named `old_name`.
+    4. Assign the extracted column values to the `new_name` column of the matched empty mesh file.
+    5. Save the updated mesh file with the specified `layer_name`.
+
+    Parameters
+    ----------
+    folder_path : Path
+        Path to the folder containing source GPKG files. Filenames must include a date string in the format 'YYYY-MM-DD', e.g. 'addis-ababa-2023-01-02.gpkg'.
+    empty_mesh_path : Path
+        Path to the folder containing empty mesh GPKG files. Filenames should also contain date strings to allow matching.
+    old_name : str
+        The column name to extract from the source GPKG files.
+    new_name : str
+        The column name to assign in the empty mesh files.
+    old_layer_name : str
+        The layer name to read from the source GPKG files, must be known to make sure successfully load the layer.
+    layer_name : str
+        The layer name to write in the new mesh files.
+
+    Returns
+    -------
+    None
+
+    Example
+    -----
+    >>> folder_path = DATA_PATH / '1'
+    >>> empty_mesh_path = DATA_PATH / 'addis-temp-mesh-data'
+    >>> old_name = 'LST_day_mean'
+    >>> new_name = 'temp_mean'
+    >>> old_layer_name = 'LST_day'
+
+
+    >>> write_single_column_to_new_mesh(
+                        folder_path=folder_path, 
+                        empty_mesh_path=empty_mesh_path, 
+                        old_name=old_name, 
+                        new_name=new_name, 
+                        old_layer_name=old_layer_name, 
+                        layer_name = lyr_addis_name)
+    """
+
+    
+    gpkg_files = [f for f in folder_path.glob("*gpkg")]
+    abs_file_paths = [folder_path / f for f in gpkg_files] # absolute path
+    n_task = len(gpkg_files)
+    
+    for index, abs_path in tqdm(enumerate(abs_file_paths), desc="Processing GPKG files: ", total = n_task):
+
+        filename = abs_path.name
+        match = re.search(r"\d{4}-\d{2}-\d{2}", filename)
+        if match:
+            date = match.group()
+        else:
+            print(f"Warning: can't find date in filename {filename}")
+            continue
+
+        try:
+            old_mesh = gpd.read_file(abs_path, layer = old_layer_name)
+            matched_mesh =  [f for f in empty_mesh_path.glob("*.gpkg") if date in f.name][0]  # typically only one match， absolute path
+            
+            new_mesh = gpd.read_file(matched_mesh)
+            new_mesh[new_name] = old_mesh[old_name]
+            new_mesh.to_file(matched_mesh, driver='GPKG', layer=layer_name, mode='w')
+
+
+        except Exception as e:
+            print(f"Error processing {abs_path} at index {index}: {e}")
+            print("Skipping to next file...")
+            continue
+
+
+
+from pathlib import Path
+from datetime import datetime, timedelta
+import geopandas as gpd
+import pandas as pd
+from tqdm import tqdm
+
+def convert_gpkgs_to_parquet(mesh_folder: Path, output_path: Path, file_name: str) -> None:
+    """
+    Load multiple GeoPackage files from a folder, assign sequential dates starting from 2023-01-01,
+    concatenate them into a single GeoDataFrame, and save the result as a parquet file.
+
+    Parameters:
+        mesh_folder (Path): Path to the folder containing GeoPackage (.gpkg) files.
+        output_path (Path): Directory path where the parquet file will be saved.
+        file_name (str): Name of the output parquet file (without extension).
+
+    Returns:
+        None
+
+    Side Effects:
+        Saves the concatenated GeoDataFrame to '{output_path}/{file_name}.parquet' 
+        using the PyArrow engine with Snappy compression.
+    """
+
+    file_paths = sorted(mesh_folder.glob("*.gpkg"))
+    all_data = []
+
+    for i, path in tqdm(enumerate(file_paths), total=len(file_paths)):
+        date = datetime(2023, 1, 1) + timedelta(days=i)
+        gdf = gpd.read_file(path)
+        gdf["date"] = date
+        all_data.append(gdf)
+
+    full_df = pd.concat(all_data, ignore_index=True)
+    full_df.to_parquet(output_path / f"{file_name}.parquet", engine="pyarrow", compression="snappy")
+
