@@ -14,6 +14,8 @@ from rasterstats import zonal_stats
 from pathlib import Path
 import pandas as pd
 from pandas import DataFrame
+from typing import Union
+
 
 # Function: Aggregate data within each mesh
 def aggregate_to_mesh(mesh_grid, 
@@ -384,3 +386,236 @@ def aggregate_cloud_data(
         except Exception as err:
             print(f"Processing failed: {err}")
             continue
+
+import geopandas as gpd
+from rasterstats import zonal_stats
+
+def aggregate_landcover_area_to_mesh(
+    mesh_path,
+    filled_raster,
+    output_layer="LandCover_2023",
+    pixel_area=100  # ESA pixel is 10m × 10m = 100 m²
+):
+    """
+    Aggregate land cover area (m²) for each ESA category into mesh cells.
+
+    Parameters
+    ----------
+    mesh_path : Path
+        Path to the mesh GPKG file.
+    filled_raster : Path
+        Path to the filled ESA raster (GeoTIFF).
+    output_layer : str
+        Layer name for output.
+    pixel_area : int
+        Area of a single pixel in m² (default: 100).
+    """
+    # Define ESA land cover codes and target field names
+    esa_code_to_column = {
+        10: "tree_cover_a",
+        20: "shrubland_a",
+        30: "grassland_a",
+        40: "cropland_a",
+        50: "built_up_a",
+        60: "sparse_veg_a",
+        70: "snow_a",
+        80: "water_bod_a",
+        90: "wetland_a",
+        95: "mangroves_a",
+        100: "moss_a",
+        255: "unclassified_a"
+    }
+
+    mesh = gpd.read_file(mesh_path)
+
+    stats = zonal_stats(
+        mesh,
+        filled_raster,
+        categorical=True,
+        nodata=255
+    )
+
+    # Initialize result columns with 0
+    for col in esa_code_to_column.values():
+        mesh[col] = 0
+
+    for i, stat in enumerate(stats):
+        for lc_code, count in stat.items():
+            colname = esa_code_to_column.get(lc_code)
+            if colname:
+                mesh.at[i, colname] = count * pixel_area
+
+    mesh.to_file(mesh_path, layer=output_layer, driver="GPKG")
+    print(f"Land cover area written to layer: {output_layer}")
+
+def aggregate_landcover_to_mesh(
+    mesh_path: Union[str, Path],
+    filled_raster: Union[str, Path],
+    output_layer: str,
+    column_name: str,
+    nodata_value: int = 255,
+    layer_name: str = None
+) -> None:
+    """
+    Aggregate land cover raster to mesh using majority value per polygon.
+
+    Parameters
+    ----------
+    mesh_path : str or Path
+        Path to the mesh GPKG file.
+    filled_raster : str or Path
+        Path to the filled raster (land cover classification).
+    output_layer : str
+        Name of the output layer to save results into.
+    column_name : str
+        Name of the output column in the GeoDataFrame.
+    nodata_value : int
+        Raster nodata value to ignore during aggregation.
+    layer_name : str, optional
+        If provided, use this layer from the GPKG file instead of default.
+    """
+    import rasterstats
+    import geopandas as gpd
+    import numpy as np
+
+    # Load mesh as GeoDataFrame
+    if layer_name:
+        mesh_gdf = gpd.read_file(mesh_path, layer=layer_name)
+    else:
+        mesh_gdf = mesh_path  # assume file path for zonal_stats
+
+    # Compute zonal stats
+    stats = rasterstats.zonal_stats(
+        mesh_gdf,
+        filled_raster,
+        stats="majority",
+        geojson_out=True,
+        nodata=nodata_value
+    )
+
+    gdf = gpd.GeoDataFrame.from_features(stats)
+    gdf = gdf.rename(columns={"majority": column_name})
+    gdf = gdf[gdf.geometry.notnull()]
+
+    # Save to GPKG
+    gdf.to_file(mesh_path, layer=output_layer, driver="GPKG")
+    print(f"[Saved] {output_layer} written to: {mesh_path}")
+
+
+
+import os
+import re
+from pathlib import Path
+import geopandas as gpd
+import rasterio
+import numpy as np
+from rasterstats import zonal_stats
+from tqdm import tqdm
+
+def batch_aggregate_LST(
+    tiff_folder: Path,
+    mesh_folder: Path,
+    batch_size: int = 50
+):
+    """
+    Batch aggregate daily LST raster files to the corresponding mesh file.
+
+    Parameters
+    ----------
+    tiff_folder : Path
+        Folder containing filled daily LST GeoTIFFs.
+    mesh_folder : Path
+        Folder to save GPKG files containing aggregated mesh-level LST data.
+    batch_size : int
+        Number of files to process in one batch (not strictly used here, but can be extended).
+    """
+    import geopandas as gpd
+    import rasterstats
+    from tqdm import tqdm
+    import re
+
+    tif_files = sorted([f for f in os.listdir(tiff_folder) if f.endswith(".tif")])
+    mesh_sample = next(iter(mesh_folder.glob("*.gpkg")), None)
+
+    if mesh_sample is None:
+        raise FileNotFoundError("No mesh file found in mesh_folder.")
+
+    city = mesh_sample.stem.split("-")[0]
+    print(f"Detected city: {city}")
+
+    for tif_file in tqdm(tif_files):
+        match = re.search(r"(\d{4}-\d{2}-\d{2})", tif_file)
+        if not match:
+            print(f"⚠️  Cannot extract date from {tif_file}, skipping.")
+            continue
+
+        date_str = match.group(1)
+        tif_path = tiff_folder / tif_file
+        mesh_path = mesh_folder / f"{city}-{date_str}.gpkg"
+
+        if not mesh_path.exists():
+            print(f"No mesh file found for {tif_file}, skipping.")
+            continue
+
+        try:
+            stats = rasterstats.zonal_stats(
+                mesh_path,
+                tif_path,
+                stats="mean",
+                geojson_out=True,
+                nodata=0
+            )
+            gdf = gpd.GeoDataFrame.from_features(stats)
+            gdf.rename(columns={"mean": "LST_day_mean"}, inplace=True)
+
+            # Drop other geometry columns if accidentally added
+            for col in gdf.columns:
+                if col.startswith("geometry") and col != "geometry":
+                    gdf = gdf.drop(columns=[col])
+            gdf.set_geometry("geometry", inplace=True)
+
+            # Overwrite to GPKG file
+            gdf.to_file(mesh_path, layer="LST_day", driver="GPKG")
+        except Exception as e:
+            print(f"❌ Failed processing {tif_file}: {e}")
+
+
+
+        
+
+def clean_single_layer_gpkg(data_folder: Path, layer_name: str, columns_to_keep: list):
+    """
+    Clean each GPKG file in the folder by keeping only the specified layer and selected columns.
+    Ensures only one geometry column is present and writes back to the same GPKG file.
+    """
+    from tqdm import tqdm
+
+    gpkg_files = sorted([f for f in os.listdir(data_folder) if f.endswith(".gpkg")])
+
+    for file in tqdm(gpkg_files):
+        fpath = data_folder / file
+        try:
+            gdf = gpd.read_file(fpath, layer=layer_name)
+        except Exception as e:
+            print(f"Cannot read layer '{layer_name}' in {file}: {e}")
+            continue
+
+        # Remove any secondary geometry columns
+        for col in gdf.columns:
+            if col != "geometry" and gdf[col].dtype.name == "geometry":
+                gdf = gdf.drop(columns=[col])
+
+        # Make sure 'geometry' is the active geometry
+        gdf = gdf.set_geometry("geometry")
+
+        # Only keep valid geometry
+        gdf = gdf[gdf.geometry.notnull() & gdf.is_valid]
+
+        # Keep only the specified columns that exist
+        keep_cols = [col for col in columns_to_keep if col in gdf.columns]
+        gdf = gdf[keep_cols + ["geometry"]]
+
+        # Overwrite the original file with only one cleaned layer
+        gdf.to_file(fpath, layer=layer_name, driver="GPKG")
+
+        print(f" Cleaned: {file}")
