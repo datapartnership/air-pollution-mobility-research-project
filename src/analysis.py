@@ -87,9 +87,7 @@ import geopandas as gpd
 from typing import List
 pd.set_option('future.no_silent_downcasting', True)
 
-def average_mesh_over_time(
-        gdfs: List[gpd.GeoDataFrame]
-) -> gpd.GeoDataFrame:
+def average_mesh_over_time(gdfs: List[gpd.GeoDataFrame]) -> gpd.GeoDataFrame:
     """
     Calculate the temporal average of numerical features from a list of GeoDataFrames (meshes).
     
@@ -110,30 +108,31 @@ def average_mesh_over_time(
     >>> mean_mesh = average_mesh_over_time(gdfs)
     """
 
-    # Get numeric columns, excluding 'geom_id' if present
     numeric_cols = gdfs[0].select_dtypes(include=[np.number]).columns.tolist()
     if "geom_id" in numeric_cols:
         numeric_cols.remove("geom_id")
-    
+
     cleaned_arrays = []
     for gdf in gdfs:
-        # Replace None with np.nan to handle missing values
-        temp_df = gdf[numeric_cols].replace({None: np.nan}).copy()
-        # Infer proper data types to avoid future warnings
-        temp_df = temp_df.infer_objects(copy=False)
-        cleaned_arrays.append(temp_df.values)
+        # select only the valid columns
+        valid_cols = [col for col in numeric_cols if col in gdf.columns]
+        
+        temp_data = pd.DataFrame(columns=numeric_cols)
+        for col in numeric_cols:
+            if col in gdf.columns:
+                temp_data[col] = gdf[col]
+            else:
+                temp_data[col] = np.nan
+        
+        temp_data = temp_data.replace({None: np.nan}).infer_objects(copy=False)
+        cleaned_arrays.append(temp_data.values)
     
-    # Convert list of arrays to 3D numpy array: (time, n_cells, n_features)
     data_matrix = np.array(cleaned_arrays)
-    
-    # Compute mean along time axis, ignoring NaNs
     mean_data = np.nanmean(data_matrix, axis=0)
-    
-    # Construct a new GeoDataFrame using geometry and geom_id from first gdf
+
     mean_gdf = gdfs[0][["geom_id", "geometry"]].copy()
-    # Assign averaged numeric features
     mean_gdf[numeric_cols] = mean_data
-    
+
     return mean_gdf
 
 
@@ -143,6 +142,7 @@ from esda import Moran_Local
 import matplotlib.pyplot as plt
 import geopandas as gpd
 from pathlib import Path
+from typing import Optional
 
 def compute_plot_local_moran(
     gdf: gpd.GeoDataFrame,
@@ -154,7 +154,9 @@ def compute_plot_local_moran(
     if_emphasize: bool = True,
     cmap: str = "hot_r",
     figsize: tuple = (10, 8),
-    show_plot: bool = True
+    show_plot: bool = True,
+    ax: Optional[plt.Axes] = None,
+    **plot_kwargs
 ) -> gpd.GeoDataFrame:
     """
     Compute Local Moran's I statistic for a numeric feature in a GeoDataFrame and visualize it.
@@ -210,8 +212,10 @@ def compute_plot_local_moran(
         plot_title = f"Local Moran's I ({feature_col})"
 
     # Create plot
-    fig, ax = plt.subplots(1, 1, figsize=figsize)
-    gdf_result.plot(column="local_I", cmap=cmap, legend=True, ax=ax)
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=figsize)
+    
+    gdf_result.plot(column="local_I", cmap=cmap, legend=True, ax=ax, **plot_kwargs)
 
     # Outline statistically significant areas
     if if_emphasize:
@@ -257,3 +261,264 @@ def plot_xgb_feature_importance(model, features, importance_type:str = 'weight')
     plt.title("XGBoost Feature Importance")
     plt.tight_layout()
     plt.show()
+
+
+import warnings
+from datetime import timedelta
+from libpysal.weights import KNN
+
+def add_lag_features(full_df, output_path: Path, file_name: str, k_neighbors=8) -> None:
+    """
+    Add lagged NO2 features to the DataFrame by performing the following steps:
+
+    1. Calculate the previous day's NO2 values for each location (geom_id).
+    2. Compute the previous day's average NO2 values of spatial neighbors for each location.
+    3. Save the resulting DataFrame with these new features as a _parquet_ file.
+
+    Parameters:
+        full_df (pd.DataFrame): 
+            DataFrame containing at least ['geom_id', 'date', 'no2_mean'] columns.
+        output_path (Path): 
+            Directory where the output parquet file will be saved.
+        file_name (str): 
+            Name of the output parquet file (without extension).
+        k_neighbors (int, optional): 
+            Number of spatial neighbors to consider for lag calculation. Default is 8.
+
+    Returns:
+        pd.DataFrame: 
+            The input DataFrame with two new columns added:
+            'no2_lag1' - previous day's NO2 value for the same geom_id,
+            'no2_neighbor_lag1' - previous day's average NO2 of spatial neighbors.
+
+    Side Effects:
+        Saves the augmented DataFrame to '{output_path}/{file_name}.parquet' 
+        using PyArrow engine with Snappy compression.
+    """
+
+    # Sort DataFrame by geom_id and date
+    full_df = full_df.sort_values(["geom_id", "date"]).copy()
+
+    # Add previous day's no2_mean for each geom_id
+    full_df["no2_lag1"] = full_df.groupby("geom_id")["no2_mean"].shift(1)
+
+    # Use the earliest date's data to construct neighbor relationships
+    sample_gdf = full_df[full_df['date'] == full_df['date'].min()].reset_index(drop=True)
+
+    # Suppress warnings from libpysal
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        w = KNN.from_dataframe(sample_gdf, k=k_neighbors)
+
+    w.transform = 'r'  # Row-standardization
+
+    # Create a mapping from geom_id to its neighbors' geom_ids
+    index_to_geom_id = dict(sample_gdf['geom_id'].items())
+    geom_id_to_neighbors = {
+        index_to_geom_id[i]: [index_to_geom_id[j] for j in neighbors]
+        for i, neighbors in w.neighbors.items()
+    }
+
+    # Create a dictionary of DataFrames grouped by date for quick access
+    df_by_date = {d: gdf for d, gdf in full_df.groupby("date")}
+
+    def compute_neighbor_no2(row):
+        date = row["date"]
+        geom_id = row["geom_id"]
+        prev_date = date - timedelta(days=1)
+        if prev_date not in df_by_date:
+            return None
+        prev_day_df = df_by_date[prev_date]
+        neighbors = geom_id_to_neighbors.get(geom_id, [])
+        values = prev_day_df[prev_day_df["geom_id"].isin(neighbors)]["no2_mean"]
+        return values.mean() if not values.empty else None
+
+    # Calculate previous day's mean NO2 for neighboring locations
+    full_df["no2_neighbor_lag1"] = full_df.apply(compute_neighbor_no2, axis=1)
+
+    full_df.to_parquet(output_path / f"{file_name}.parquet", engine="pyarrow", compression="snappy")
+
+    return full_df
+
+
+import shap
+import xgboost as xgb
+from sklearn.pipeline import Pipeline
+import shap
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ========== SHAP Visualization Function ==========
+def explain_shap_rf(
+    pipeline:Pipeline,
+    X_background: pd.DataFrame,
+    X_eval: pd.DataFrame,
+    max_display: int = 15,
+    clip_range: tuple = (-2e-5, 1.5e-5),
+    plot_title: str = "SHAP Feature Impact on Model Output"
+) -> tuple[shap.TreeExplainer, shap.Explanation]:
+    """
+    Returns SHAP TreeExplainer and Explanation object, and plots bar (optional) + beeswarm charts.
+    Supports sklearn.pipeline.Pipeline by extracting the final model automatically.
+    """
+    # extract the model
+    model = pipeline.steps[-1][1]
+
+    # create explainer
+    explainer = shap.TreeExplainer(
+        model,
+        data=X_background,
+        feature_perturbation="interventional"
+    )
+    shap_exp = explainer(X_eval)
+
+    if max_display > 0:
+        shap_values_clipped = np.clip(shap_exp.values, clip_range[0], clip_range[1])
+        shap_exp.values = shap_values_clipped
+
+        # plot bar chart
+        # shap.plots.bar(shap_exp, max_display=max_display)
+
+        # plot beeswarm chart
+        shap.summary_plot(shap_values_clipped, X_eval, max_display=max_display, show=False)
+        plt.title(plot_title, fontsize=14)
+        plt.gcf().set_size_inches(12, 6)
+        plt.tight_layout()
+        plt.show()
+
+    return explainer, shap_exp
+
+def explain_shap_xgb(
+    model: xgb.Booster,
+    X_background: pd.DataFrame,
+    X_eval: pd.DataFrame,
+    max_display: int = 15,
+    clip_range: tuple = (-2e-5, 1.5e-5),
+    plot_title: str = "SHAP Feature Impact on Model Output"
+) -> tuple[shap.TreeExplainer, shap.Explanation]:
+    """
+    Returns SHAP TreeExplainer and Explanation object, and plots bar (optional) + beeswarm charts.
+    Supports sklearn.pipeline.Pipeline by extracting the final model automatically.
+    """
+    # explainer = shap.TreeExplainer(model, data=X_test_sample,)
+    # shap_exp = explainer(X_eval)
+
+    explainer = shap.TreeExplainer(
+        model,
+        data=X_background,
+        feature_perturbation="interventional"
+    )
+    shap_exp = explainer(X_eval)
+    
+    if max_display > 0:
+        shap_values_clipped = np.clip(shap_exp.values, clip_range[0], clip_range[1])
+        shap_exp.values = shap_values_clipped
+
+        # plot bar chart
+        # shap.plots.bar(shap_exp, max_display=max_display)
+
+        # plot beeswarm chart
+        shap.summary_plot(shap_values_clipped, X_eval, max_display=max_display, show=False)
+        plt.title(plot_title, fontsize=14)
+        plt.gcf().set_size_inches(12, 6)
+        plt.tight_layout()
+        plt.show()
+
+    return explainer, shap_exp
+
+# ========== SHAP-based Approximate Elasticity Computation ==========
+
+def compute_elasticities_shap_rf(
+    pipeline: Pipeline,
+    shap_exp: shap.Explanation,
+    low_q: float = 0.25,
+    high_q: float = 0.75
+) -> pd.DataFrame:
+    """
+    Estimates elasticity coefficients for each feature using:
+    eᵢ = medianₘ [(ϕᵢₘ / ŷₘ) * (xᵢₘ / Δxᵢ)],
+    where Δxᵢ is the interquartile range.
+    """
+    # 1. Extract data and SHAP values
+    X = pd.DataFrame(shap_exp.data, columns=shap_exp.feature_names)
+    shap_vals = shap_exp.values
+    y_hat = pipeline.predict(X.values)
+
+    # 2. build a boolean mask: keep rows with finite values everywhere
+    mask = (
+        np.isfinite(y_hat) &
+        np.isfinite(shap_vals).all(axis=1) &
+        np.isfinite(X).all(axis=1)
+    )
+    X = X.loc[mask].reset_index(drop=True)
+    shap_vals = shap_vals[mask]
+    y_hat = y_hat[mask]
+
+    # 3. Compute interquartile range for each feature
+    qs = X.quantile([low_q, high_q])
+    dx = qs.loc[high_q] - qs.loc[low_q]
+    dx.replace(0, 1e-8, inplace=True)            # avoid /0
+    dx.fillna(1e-8, inplace=True)                # avoid NaN
+
+    # 4. Compute relative elasticities
+    rels = (shap_vals / y_hat[:, None]) * (X.values / dx.values[None, :])
+
+    # 5. Construct elasticity summary DataFrame
+    elas = pd.DataFrame({
+        "feature": X.columns,
+        "median_elasticity": np.median(rels, axis=0),
+        "p10": np.percentile(rels, 10, axis=0),
+        "p90": np.percentile(rels, 90, axis=0),
+    })
+
+    return elas.sort_values("median_elasticity", ascending=False)
+
+
+def compute_elasticities_shap_xgb(
+    model: xgb.Booster,
+    shap_exp: shap.Explanation,
+    low_q: float = 0.25,
+    high_q: float = 0.75
+) -> pd.DataFrame:
+    """
+    Estimates elasticity coefficients for each feature using:
+    eᵢ = medianₘ [(ϕᵢₘ / ŷₘ) * (xᵢₘ / Δxᵢ)],
+    where Δxᵢ is the interquartile range.
+    """
+    # 1. Extract data and SHAP values
+    X = pd.DataFrame(shap_exp.data, columns=shap_exp.feature_names)
+    shap_vals = shap_exp.values
+
+    dmatrix = xgb.DMatrix(X, feature_names=list(X.columns))
+    y_hat = model.predict(dmatrix)
+
+    # 2. build a boolean mask: keep rows with finite values everywhere
+    mask = (
+        np.isfinite(y_hat) &
+        np.isfinite(shap_vals).all(axis=1) &
+        np.isfinite(X).all(axis=1)
+    )
+    X = X.loc[mask].reset_index(drop=True)
+    shap_vals = shap_vals[mask]
+    y_hat = y_hat[mask]
+
+    # 3. Compute interquartile range for each feature
+    qs = X.quantile([low_q, high_q])
+    dx = qs.loc[high_q] - qs.loc[low_q]
+    dx.replace(0, 1e-8, inplace=True)            # avoid /0
+    dx.fillna(1e-8, inplace=True)                # avoid NaN
+
+    # 4. Compute relative elasticities
+    rels = (shap_vals / y_hat[:, None]) * (X.values / dx.values[None, :])
+
+    # 5. Construct elasticity summary DataFrame
+    elas = pd.DataFrame({
+        "feature": X.columns,
+        "median_elasticity": np.median(rels, axis=0),
+        "p10": np.percentile(rels, 10, axis=0),
+        "p90": np.percentile(rels, 90, axis=0),
+    })
+
+    return elas.sort_values("median_elasticity", ascending=False)
+
+

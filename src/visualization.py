@@ -1023,3 +1023,286 @@ def plot_cloud_category_raster(
         ax.legend(handles=handles, loc="lower right", **legend_kwargs)
 
     return ax, legend_ax
+
+import matplotlib.pyplot as plt
+import rasterio
+import numpy as np
+from rasterio.mask import mask
+from shapely.geometry import mapping
+import geopandas as gpd
+from pathlib import Path
+
+def plot_filled_vs_original_raster(
+    original_tif: Path,
+    filled_tif: Path,
+    shapefile: Path,
+    output_image: Path = None
+) -> None:
+    """
+    Plot original vs filled raster clipped by a shapefile geometry and optionally save the image.
+
+    Parameters
+    ----------
+    original_tif : Path
+        Path to the original raster.
+    filled_tif : Path
+        Path to the filled raster.
+    shapefile : Path
+        Path to the shapefile used to crop the filled raster.
+    output_image : Path or None
+        If provided, save the comparison image to this path.
+    """
+    shapes = gpd.read_file(shapefile)
+    geometry = [mapping(shapes.geometry.iloc[0])]
+
+    with rasterio.open(original_tif) as src_before:
+        before = src_before.read(1).astype(float)
+        before[before == src_before.nodata] = np.nan
+
+    with rasterio.open(filled_tif) as src_after:
+        out_image, _ = mask(src_after, geometry, crop=True, nodata=np.nan)
+        after = out_image[0].astype(float)
+        after[after == src_after.nodata] = np.nan
+
+    combined = np.concatenate([before[~np.isnan(before)], after[~np.isnan(after)]])
+    vmin = np.percentile(combined, 2)
+    vmax = np.percentile(combined, 98)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+    cmap = "jet"
+
+    im1 = axes[0].imshow(before, cmap=cmap, vmin=vmin, vmax=vmax)
+    axes[0].axis("off")
+    fig.colorbar(im1, ax=axes[0], fraction=0.046, pad=0.04).set_label("Temperature")
+
+    im2 = axes[1].imshow(after, cmap=cmap, vmin=vmin, vmax=vmax)
+    axes[1].axis("off")
+    fig.colorbar(im2, ax=axes[1], fraction=0.046, pad=0.04).set_label("Temperature")
+
+    plt.tight_layout()
+
+    if output_image:
+        plt.savefig(output_image, dpi=300)
+        print(f"Saved image to: {output_image.name}")
+
+    plt.show()
+
+def generate_LST_mesh_animation(data_folder, output_gif, layer_name="LST_day", column_name="LST_day_mean", cmap="YlOrRd", dpi=100, fps=6, city_label=""):
+    import geopandas as gpd
+    import matplotlib.pyplot as plt
+    import imageio
+    import numpy as np
+    from pathlib import Path
+
+    gpkg_files = sorted(data_folder.glob("*.gpkg"))
+    all_values = []
+    valid_files = []
+    skipped = []
+
+    for file in gpkg_files:
+        try:
+            gdf = gpd.read_file(file, layer=layer_name)
+            values = gdf[column_name].replace([None], np.nan).dropna().values
+            if len(values) > 0:
+                all_values.extend(values)
+                valid_files.append(file)
+        except:
+            skipped.append(file.name)
+
+    if skipped:
+        print("Skipped files:", skipped)
+
+    vmin = np.percentile(all_values, 2)
+    vmax = np.percentile(all_values, 98)
+
+    temp_img_dir = output_gif.parent / "temp_frames"
+    temp_img_dir.mkdir(parents=True, exist_ok=True)
+    frame_paths = []
+
+    for i, file in enumerate(valid_files):
+        date_str = file.stem.split("-")[-1]
+        gdf = gpd.read_file(file, layer=layer_name)
+        gdf = gdf.replace({column_name: {None: np.nan}}).dropna(subset=[column_name])
+
+        fig, ax = plt.subplots(figsize=(6, 6))
+        gdf.plot(column=column_name, cmap=cmap, ax=ax, legend=False, vmin=vmin, vmax=vmax)
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=vmin, vmax=vmax))
+        fig.colorbar(sm, ax=ax, orientation="vertical", fraction=0.03, pad=0.01).set_label("Surface Temperature (°C)", fontsize=10)
+        ax.set_title(f"{city_label} LST on {date_str}", fontsize=12)
+        ax.axis("off")
+
+        img_path = temp_img_dir / f"frame_{i:03d}.png"
+        plt.savefig(img_path, bbox_inches='tight', dpi=dpi)
+        plt.close()
+        frame_paths.append(img_path)
+
+    with imageio.get_writer(output_gif, mode='I', duration=1/fps) as writer:
+        for img_path in frame_paths:
+            writer.append_data(imageio.v3.imread(img_path))
+
+
+from matplotlib.colors import ListedColormap, BoundaryNorm
+
+def get_modis_landcover_colormap():
+    """
+    Return MODIS (IGBP) land cover classification values, names, colors, and normalization.
+
+    Returns
+    -------
+    tuple: (class_values, class_names, cmap, norm)
+    """
+    import matplotlib.colors as mcolors
+
+    class_info = {
+        0:  ("Water", "#1f78b4"),
+        1:  ("Evergreen Needleleaf Forest", "#005100"),
+        2:  ("Evergreen Broadleaf Forest", "#008000"),
+        3:  ("Deciduous Needleleaf Forest", "#339900"),
+        4:  ("Deciduous Broadleaf Forest", "#66cc00"),
+        5:  ("Mixed Forest", "#8db400"),
+        6:  ("Closed Shrublands", "#ccae62"),
+        7:  ("Open Shrublands", "#dcd159"),
+        8:  ("Woody Savannas", "#c8b75a"),
+        9:  ("Savannas", "#e2c68c"),
+        10: ("Grasslands", "#f7e084"),
+        11: ("Permanent Wetlands", "#4fa3cc"),
+        12: ("Croplands", "#ffff64"),
+        13: ("Urban and Built-Up", "#ff0000"),
+        14: ("Cropland/Natural Vegetation Mosaic", "#bfbf00"),
+        15: ("Snow and Ice", "#ffffff"),
+        16: ("Barren or Sparsely Vegetated", "#dcdcdc"),
+        254:("Unclassified", "#ffffff"),  # white for unclassified
+        255:("Fill Value", "#ffffff")     # white for no data
+    }
+
+    class_values = list(class_info.keys())
+    class_names = [class_info[val][0] for val in class_values]
+    colors = [class_info[val][1] for val in class_values]
+
+    cmap = mcolors.ListedColormap(colors)
+    norm = mcolors.BoundaryNorm(class_values + [256], cmap.N)
+
+    return class_values, class_names, cmap, norm
+
+
+
+
+import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
+import rasterio
+
+from matplotlib.colors import ListedColormap, BoundaryNorm
+
+def get_esa_landcover_colormap():
+    """
+    Returns ESA WorldCover 2021 class values, names, colormap, and normalization.
+
+    Returns
+    -------
+    class_values : list of int
+        ESA land cover class codes.
+    class_names : list of str
+        Descriptions for each class.
+    cmap : ListedColormap
+        Color map for ESA land cover categories.
+    norm : BoundaryNorm
+        Value-to-color mapping.
+    """
+    class_values = [
+        10, 20, 30, 40, 50, 60, 70, 80,
+        90, 95, 100, 111, 112, 200
+    ]
+
+    class_names = [
+        "Tree cover", "Shrubland", "Grassland", "Cropland",
+        "Built-up", "Bare/Sparse Vegetation", "Snow and Ice", "Water Bodies",
+        "Wetlands", "Mangroves", "Moss and Lichen", "Permanent Snow", "Glaciers", "No Data"
+    ]
+
+    class_colors = [
+        "#006400",  # 10 Tree cover
+        "#FFBB22",  # 20 Shrubland
+        "#FFFF4C",  # 30 Grassland
+        "#F096FF",  # 40 Cropland
+        "#FA0000",  # 50 Built-up
+        "#B4B4B4",  # 60 Bare/sparse vegetation
+        "#F0F0F0",  # 70 Snow and ice
+        "#0064C8",  # 80 Water bodies
+        "#0096A0",  # 90 Wetlands
+        "#00CF75",  # 95 Mangroves
+        "#FAE6A0",  # 100 Moss and Lichen
+        "#DCDCDC",  # 111 Permanent snow
+        "#B0E0E6",  # 112 Glaciers
+        "#FFFFFF"   # 200 No data → white
+    ]
+
+    cmap = ListedColormap(class_colors)
+    norm = BoundaryNorm(class_values + [201], cmap.N)
+
+    return class_values, class_names, cmap, norm
+
+import matplotlib.pyplot as plt
+import rasterio
+from rasterio.plot import show
+import numpy as np
+import matplotlib.patches as mpatches
+
+def plot_landcover_legend_map(
+    tiff_path,
+    class_values,
+    class_names,
+    cmap,
+    norm,
+    title="Land Cover Classification",
+    figsize=(10, 10),
+    legend_cols=3
+):
+    """
+    Plot a categorical land cover map with a corresponding legend.
+
+    Parameters
+    ----------
+    tiff_path : Path or str
+        Path to the categorical land cover raster (.tif).
+    class_values : list
+        List of land cover class values (int).
+    class_names : list
+        Corresponding list of class names (str).
+    cmap : ListedColormap
+        Color map for displaying land cover classes.
+    norm : BoundaryNorm
+        Normalization to map values to colors.
+    title : str
+        Title of the plot.
+    figsize : tuple
+        Size of the matplotlib figure.
+    legend_cols : int
+        Number of columns in the legend.
+    """
+    with rasterio.open(tiff_path) as src:
+        image = src.read(1)
+        image = np.ma.masked_equal(image, 255)  # mask nodata
+
+        fig, ax = plt.subplots(figsize=figsize)
+        show(image, ax=ax, cmap=cmap, norm=norm)
+        ax.set_title(title)
+        ax.axis("off")
+
+        # Build legend manually
+        handles = [
+            mpatches.Patch(color=cmap(norm(val)), label=name)
+            for val, name in zip(class_values, class_names)
+            if val in np.unique(image)
+        ]
+
+        # Add legend outside plot
+        fig.legend(
+            handles=handles,
+            loc='lower center',
+            ncol=legend_cols,
+            bbox_to_anchor=(0.5, -0.05),
+            fontsize=9
+        )
+
+        plt.tight_layout()
+        plt.show()
