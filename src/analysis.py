@@ -353,9 +353,11 @@ def explain_shap_rf(
     pipeline:Pipeline,
     X_background: pd.DataFrame,
     X_eval: pd.DataFrame,
+    output_path: Path,
     max_display: int = 15,
     clip_range: tuple = (-2e-5, 1.5e-5),
-    plot_title: str = "SHAP Feature Impact on Model Output"
+    plot_title: str = "SHAP Feature Impact on Model Output",
+    if_save: bool = True
 ) -> tuple[shap.TreeExplainer, shap.Explanation]:
     """
     Returns SHAP TreeExplainer and Explanation object, and plots bar (optional) + beeswarm charts.
@@ -384,7 +386,10 @@ def explain_shap_rf(
         plt.title(plot_title, fontsize=14)
         plt.gcf().set_size_inches(12, 6)
         plt.tight_layout()
-        plt.show()
+        if if_save:
+            plt.savefig(output_path / f"{plot_title}.png", dpi=700)    
+        plt.show() 
+        plt.close()
 
     return explainer, shap_exp
 
@@ -392,9 +397,11 @@ def explain_shap_xgb(
     model: xgb.Booster,
     X_background: pd.DataFrame,
     X_eval: pd.DataFrame,
+    output_path: Path,
     max_display: int = 15,
     clip_range: tuple = (-2e-5, 1.5e-5),
-    plot_title: str = "SHAP Feature Impact on Model Output"
+    plot_title: str = "SHAP Feature Impact on Model Output",
+    if_save: bool = True
 ) -> tuple[shap.TreeExplainer, shap.Explanation]:
     """
     Returns SHAP TreeExplainer and Explanation object, and plots bar (optional) + beeswarm charts.
@@ -422,7 +429,10 @@ def explain_shap_xgb(
         plt.title(plot_title, fontsize=14)
         plt.gcf().set_size_inches(12, 6)
         plt.tight_layout()
-        plt.show()
+        if if_save:
+            plt.savefig(output_path / f"{plot_title}.png", dpi=700)    
+        plt.show()  
+        plt.close()
 
     return explainer, shap_exp
 
