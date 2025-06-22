@@ -645,6 +645,7 @@ def plot_corr_matrix(
         cols_of_interest: List[str], 
         output_path: Path, 
         plot_name: str,
+        figsize: Tuple[int, int] = (15, 12),
 ): 
     """
     Generate and save a Pearson correlation heatmap for selected features.
@@ -679,11 +680,11 @@ def plot_corr_matrix(
     corr_matrix = df_subset.corr()
 
     # Plot and save heatmap
-    plt.figure(figsize=(15, 12))
+    plt.figure(figsize=figsize)
     sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap="coolwarm", square=True)
     plt.title(plot_name, fontsize=16)
     plt.tight_layout()
-    plt.savefig(output_path / f'{plot_name}.png', dpi=300)
+    plt.savefig(output_path / f'{plot_name}.png', dpi=700)
     plt.show()
 
     print(f"Heatmap saved to {output_path / f'{plot_name}.png'}")
@@ -758,7 +759,7 @@ def plot_mean_pacf(
     # Add legend and adjust layout
     ax.legend()
     fig.tight_layout()
-    plt.savefig(output_path / f'{pacf_title}.png', dpi=300)
+    plt.savefig(output_path / f'{pacf_title}.png', dpi=700)
     plt.show()
     print(f"Figure saved to {output_path}")
 
@@ -1100,7 +1101,7 @@ def plot_filled_vs_original_raster(
     plt.tight_layout()
 
     if output_image:
-        plt.savefig(output_image, dpi=300)
+        plt.savefig(output_image, dpi=700)
         print(f"Saved image to: {output_image.name}")
 
     plt.show()

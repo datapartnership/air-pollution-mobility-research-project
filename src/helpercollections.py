@@ -925,3 +925,132 @@ def convert_gpkgs_to_parquet(mesh_folder: Path, output_path: Path, file_name: st
     full_df = pd.concat(all_data, ignore_index=True)
     full_df.to_parquet(output_path / f"{file_name}.parquet", engine="pyarrow", compression="snappy")
 
+
+import json
+from pathlib import Path
+
+def extract_headings(ipynb_path):
+    """
+    Extract markdown headings from a Jupyter Notebook file.
+
+    Args:
+        ipynb_path (str or Path): Path to the input .ipynb file.
+
+    Returns:
+        list of tuples: Each tuple contains (heading_level, heading_title).
+    """
+    with open(ipynb_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    toc = []
+    for cell in data['cells']:
+        if cell['cell_type'] == 'markdown':
+            for line in cell['source']:
+                stripped = line.lstrip()
+                if stripped.startswith('#'):
+                    level = len(stripped) - len(stripped.lstrip('# '))
+                    title = stripped.strip('#').strip()
+                    toc.append((level, title))
+    return toc
+
+# def generate_tree_lines(toc):
+#     """
+#     Generate a list of strings representing a tree structure
+#     based on extracted headings.
+
+#     Args:
+#         toc (list of tuples): List of (level, title) tuples.
+
+#     Returns:
+#         list of str: Lines of the tree structure with ASCII/Unicode branches.
+#     """
+#     stack = []
+#     n = len(toc)
+#     lines = []
+
+#     for i, (level, title) in enumerate(toc):
+#         next_same_or_less_index = None
+#         for j in range(i+1, n):
+#             if toc[j][0] <= level:
+#                 next_same_or_less_index = j
+#                 break
+#         is_last = (next_same_or_less_index is None or toc[next_same_or_less_index][0] < level)
+
+#         while len(stack) >= level:
+#             stack.pop()
+
+#         stack.append(not is_last)
+
+#         indent = ""
+#         for idx in range(level - 1):
+#             if stack[idx]:
+#                 indent += "│   "
+#             else:
+#                 indent += "    "
+
+#         branch = "├── " if stack[-1] else "└── "
+#         lines.append(f"{indent}{branch}{title}")
+
+#     return lines
+def generate_tree_lines(toc):
+    """
+    Generate a list of strings representing a tree structure
+    based on extracted headings.
+
+    Args:
+        toc (list of tuples): List of (level, title) tuples.
+
+    Returns:
+        list of str: Lines of the tree structure with ASCII/Unicode branches.
+    """
+    stack = []
+    lines = []
+    n = len(toc)
+
+    for i, (level, title) in enumerate(toc):
+        # Find if this is the last node at the current level
+        next_same_or_less_index = None
+        for j in range(i + 1, n):
+            if toc[j][0] <= level:
+                next_same_or_less_index = j
+                break
+        is_last = (next_same_or_less_index is None or toc[next_same_or_less_index][0] < level)
+
+        # Ensure stack has exactly level-1 elements before appending
+        while len(stack) > level - 1:
+            stack.pop()
+        while len(stack) < level - 1:
+            stack.append(True)  # filler to avoid index error
+
+        stack.append(not is_last)
+
+        indent = ""
+        for idx in range(level - 1):
+            if stack[idx]:
+                indent += "│   "
+            else:
+                indent += "    "
+
+        branch = "├── " if not is_last else "└── "
+        lines.append(f"{indent}{branch}{title}")
+
+    return lines
+
+
+def export_notebook_toc(ipynb_path, output_path):
+    """
+    Extract the table of contents from a Jupyter Notebook and save
+    it as a tree-structured text file.
+
+    Args:
+        ipynb_path (str or Path): Path to the input notebook (.ipynb).
+        output_path (str or Path): Path to the output text file.
+    """
+    name = ipynb_path.stem
+    toc = extract_headings(ipynb_path)
+    lines = generate_tree_lines(toc)
+    for line in lines:
+        print(line) 
+    with open(output_path / f'{name}_TOC.txt', 'w', encoding='utf-8') as f:
+        f.write('\n'.join(lines))
+    print(f"Saved Table of Content to: {output_path}")
