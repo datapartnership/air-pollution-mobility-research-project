@@ -151,139 +151,139 @@ def aggregate_pop_data(
             continue
 
 from typing import List
-# def compute_mean_mesh_by_daytype(
-#     date_df: DataFrame,
-#     meshes_path: Path,
-#     output_path: Path,
-#     feature_col: str = "no2_mean",
-#     output_name: str = "mean_mesh_workdays_weekends.gpkg",
-#     country: str = "Ethiopia",
-#     city: str = "addis-ababa",
-#     grid_id_col: str = "geom_id",
-#     specify_date: bool = False,
-#     selected_dates: List = ["2023-01-01", "2023-01-02"],
-# ) -> None:
+def compute_mean_mesh_by_daytype(
+    date_df: DataFrame,
+    meshes_path: Path,
+    output_path: Path,
+    feature_col: str = "no2_mean",
+    output_name: str = "mean_mesh_workdays_weekends.gpkg",
+    country: str = "Ethiopia",
+    city: str = "addis-ababa",
+    grid_id_col: str = "geom_id",
+    specify_date: bool = False,
+    selected_dates: List = ["2023-01-01", "2023-01-02"],
+) -> None:
 
-#     """
-#     Compute the mean value of a specified feature over spatial grids, grouped by day types 
-#     (e.g., Workdays, Weekends), and save the merged result to a GeoPackage file.
+    """
+    Compute the mean value of a specified feature over spatial grids, grouped by day types 
+    (e.g., Workdays, Weekends), and save the merged result to a GeoPackage file.
 
-#     Parameters
-#     ----------
-#     date_df : pandas.DataFrame
-#         DataFrame containing at least two columns: 'Date' (datetime) and 
-#         '<country>_Workday_Type', which defines the grouping (e.g., "Workdays", "Weekends").
+    Parameters
+    ----------
+    date_df : pandas.DataFrame
+        DataFrame containing at least two columns: 'Date' (datetime) and 
+        '<country>_Workday_Type', which defines the grouping (e.g., "Workdays", "Weekends").
 
-#     meshes_path : pathlib.Path
-#         Path to the directory containing input GPKG files (one per day), named like 'city-YYYY-MM-DD.gpkg'.
+    meshes_path : pathlib.Path
+        Path to the directory containing input GPKG files (one per day), named like 'city-YYYY-MM-DD.gpkg'.
 
-#     output_path : pathlib.Path
-#         Directory where the output GeoPackage will be saved.
+    output_path : pathlib.Path
+        Directory where the output GeoPackage will be saved.
 
-#     feature_col : str, optional (default="no2_mean")
-#         Name of the numeric column in GPKG files to average across days.
+    feature_col : str, optional (default="no2_mean")
+        Name of the numeric column in GPKG files to average across days.
 
-#     output_name : str, optional (default="mean_mesh_workdays_weekends.gpkg")
-#         Name of the output GeoPackage file.
+    output_name : str, optional (default="mean_mesh_workdays_weekends.gpkg")
+        Name of the output GeoPackage file.
 
-#     country : str, optional (default="Ethiopia")
-#         Country name used to select the correct '<country>_Workday_Type' column in `date_df`.
+    country : str, optional (default="Ethiopia")
+        Country name used to select the correct '<country>_Workday_Type' column in `date_df`.
 
-#     city : str, optional (default="addis-ababa")
-#         Used to parse dates from GPKG filenames, assumed to follow the format 'city-YYYY-MM-DD.gpkg'.
+    city : str, optional (default="addis-ababa")
+        Used to parse dates from GPKG filenames, assumed to follow the format 'city-YYYY-MM-DD.gpkg'.
 
-#     grid_id_col : str, optional (default="geom_id")
-#         Column name that uniquely identifies each spatial grid cell.
+    grid_id_col : str, optional (default="geom_id")
+        Column name that uniquely identifies each spatial grid cell.
 
-#     Returns
-#     -------
-#     None
-#         Saves the computed mean GeoDataFrame as a GPKG file to `output_path / output_name`.
-#     """
+    Returns
+    -------
+    None
+        Saves the computed mean GeoDataFrame as a GPKG file to `output_path / output_name`.
+    """
 
-#     # Format date strings and map them to workday/weekend types
-#     date_df["Date_str"] = date_df["Date"].dt.strftime("%Y-%m-%d")
-#     date_class_map = dict(zip(date_df["Date_str"], date_df[f"{country}_Workday_Type"]))
+    # Format date strings and map them to workday/weekend types
+    date_df["Date_str"] = date_df["Date"].dt.strftime("%Y-%m-%d")
+    date_class_map = dict(zip(date_df["Date_str"], date_df[f"{country}_Workday_Type"]))
 
-#     # Scan all GPKG files
-#     file_paths = sorted(meshes_path.glob("*.gpkg"))
+    # Scan all GPKG files
+    file_paths = sorted(meshes_path.glob("*.gpkg"))
 
-#     # Prepare containers for each unique day class (e.g., Workdays, Weekends)
-#     day_classes = set(date_df[f"{country}_Workday_Type"])
-#     group_frames = {key: [] for key in day_classes}
+    # Prepare containers for each unique day class (e.g., Workdays, Weekends)
+    day_classes = set(date_df[f"{country}_Workday_Type"])
+    group_frames = {key: [] for key in day_classes}
 
-#     # Process each file and group by date class
-#     for fp in file_paths:
-#         # Extract date string from filename
-#         date_str = os.path.basename(fp).split(f"{city}-")[-1].split(".gpkg")[0]
+    # Process each file and group by date class
+    for fp in file_paths:
+        # Extract date string from filename
+        date_str = os.path.basename(fp).split(f"{city}-")[-1].split(".gpkg")[0]
 
-#         # Get corresponding day type from lookup
-#         group_key = date_class_map.get(date_str)
-#         if group_key not in group_frames:
-#             raise KeyError(f"Date '{date_str}' not found in date table or has an unknown class.")
+        # Get corresponding day type from lookup
+        group_key = date_class_map.get(date_str)
+        if group_key not in group_frames:
+            raise KeyError(f"Date '{date_str}' not found in date table or has an unknown class.")
 
-#         # Read GPKG file
-#         gdf = gpd.read_file(fp)
+        # Read GPKG file
+        gdf = gpd.read_file(fp)
 
-#         # Skip if target feature column is missing
-#         if feature_col not in gdf.columns:
-#             continue
+        # Skip if target feature column is missing
+        if feature_col not in gdf.columns:
+            continue
 
-#         if specify_date and date_str not in selected_dates:
-#             continue  # if specify date is true, check if the date is within the dates
+        if specify_date and date_str not in selected_dates:
+            continue  # if specify date is true, check if the date is within the dates
 
-#         # Keep only required columns
-#         gdf = gdf[[grid_id_col, feature_col, "geometry"]]
+        # Keep only required columns
+        gdf = gdf[[grid_id_col, feature_col, "geometry"]]
 
-#         # Append to the relevant day group
-#         group_frames[group_key].append(gdf)
+        # Append to the relevant day group
+        group_frames[group_key].append(gdf)
 
-#     # Compute mean per group
-#     mean_frames = {}
-#     for group_key, frames in group_frames.items():
-#         if not frames:
-#             raise ValueError(f"No files found for group '{group_key}'!")
+    # Compute mean per group
+    mean_frames = {}
+    for group_key, frames in group_frames.items():
+        if not frames:
+            raise ValueError(f"No files found for group '{group_key}'!")
 
-#         # Stack all daily grids
-#         stacked = pd.concat(frames, ignore_index=True)
+        # Stack all daily grids
+        stacked = pd.concat(frames, ignore_index=True)
 
-#         # Group by grid ID and compute mean
-#         mean_df = (
-#             stacked.groupby(grid_id_col, as_index=False)
-#                    .agg({feature_col: "mean"})
-#                    .rename(columns={feature_col: f"{group_key}_mean"})
-#         )
+        # Group by grid ID and compute mean
+        mean_df = (
+            stacked.groupby(grid_id_col, as_index=False)
+                   .agg({feature_col: "mean"})
+                   .rename(columns={feature_col: f"{group_key}_mean"})
+        )
 
-#         # Use geometry from the first frame
-#         geom_ref = frames[0][[grid_id_col, "geometry"]]
-#         mean_gdf = gpd.GeoDataFrame(
-#             mean_df.merge(geom_ref, on=grid_id_col, how="left"),
-#             geometry="geometry",
-#             crs=frames[0].crs
-#         )
+        # Use geometry from the first frame
+        geom_ref = frames[0][[grid_id_col, "geometry"]]
+        mean_gdf = gpd.GeoDataFrame(
+            mean_df.merge(geom_ref, on=grid_id_col, how="left"),
+            geometry="geometry",
+            crs=frames[0].crs
+        )
 
-#         mean_frames[group_key] = mean_gdf
+        mean_frames[group_key] = mean_gdf
 
-#     # Merge all groups side by side
-#     group_keys = list(mean_frames.keys())
-#     final_gdf = mean_frames[group_keys[0]]
+    # Merge all groups side by side
+    group_keys = list(mean_frames.keys())
+    final_gdf = mean_frames[group_keys[0]]
 
-#     for key in group_keys[1:]:
-#         final_gdf = final_gdf.merge(
-#             mean_frames[key].drop(columns="geometry"),
-#             on=grid_id_col,
-#             how="left"
-#         )
+    for key in group_keys[1:]:
+        final_gdf = final_gdf.merge(
+            mean_frames[key].drop(columns="geometry"),
+            on=grid_id_col,
+            how="left"
+        )
 
-#     # Ensure output path exists
-#     output_path.mkdir(parents=True, exist_ok=True)
-#     output_file = output_path / output_name
+    # Ensure output path exists
+    output_path.mkdir(parents=True, exist_ok=True)
+    output_file = output_path / output_name
 
-#     # Save result to GPKG
-#     final_gdf.to_file(output_file, layer="mean_mesh", driver="GPKG")
-#     print(f"Saved mean meshes to {output_file}")
+    # Save result to GPKG
+    final_gdf.to_file(output_file, layer="mean_mesh", driver="GPKG")
+    print(f"Saved mean meshes to {output_file}")
 
-#     return final_gdf
+    return final_gdf
 
 import geopandas as gpd
 import numpy as np
@@ -524,7 +524,7 @@ def batch_aggregate_LST(tiff_folder: Path, mesh_folder: Path, batch_size: int = 
         mesh_folder = Path(mesh_folder)
 
     tif_files = sorted([f for f in tiff_folder.glob("*.tif") if "-" in f.name])
-    print(f"📦 Found {len(tif_files)} TIFF files to process")
+    print(f"Found {len(tif_files)} TIFF files to process")
 
     for i in tqdm(range(0, len(tif_files), batch_size)):
         batch = tif_files[i:i+batch_size]
@@ -537,13 +537,13 @@ def batch_aggregate_LST(tiff_folder: Path, mesh_folder: Path, batch_size: int = 
                 gpkg_path = mesh_folder / f"{city}-{date_str}.gpkg"
 
                 if not gpkg_path.exists():
-                    print(f"❌ Missing mesh file: {gpkg_path.name}, skipping.")
+                    print(f"Missing mesh file: {gpkg_path.name}, skipping.")
                     continue
 
                 # Read mesh
                 mesh = gpd.read_file(gpkg_path, layer=0)
                 if mesh.empty:
-                    print(f"❌ Empty mesh in: {gpkg_path.name}, skipping.")
+                    print(f"Empty mesh in: {gpkg_path.name}, skipping.")
                     continue
 
                 # Compute zonal mean
@@ -561,7 +561,7 @@ def batch_aggregate_LST(tiff_folder: Path, mesh_folder: Path, batch_size: int = 
                 # Write to new layer in same GPKG
                 mesh.to_file(gpkg_path, layer="LST_day", driver="GPKG")
             except Exception as e:
-                print(f"❌ Failed to process {tif.name}: {e}")
+                print(f"Failed to process {tif.name}: {e}")
 
         
 
@@ -602,3 +602,94 @@ def clean_single_layer_gpkg(data_folder: Path, layer_name: str, columns_to_keep:
 
         print(f" Cleaned: {file}")
 
+def compute_mode_mesh_by_daytype(
+    date_df: pd.DataFrame,
+    meshes_path: Path,
+    output_path: Path,
+    feature_col: str = "cloud_category", 
+    output_name: str = "mode_mesh_workdays_weekends.gpkg",
+    country: str = "Ethiopia",
+    city: str = "addis-ababa",
+    grid_id_col: str = None,
+    specify_date: bool = False,
+    selected_dates: List[str] = None,
+    gpkg_layer: str = None  
+):
+    import geopandas as gpd
+    import os
+    import pandas as pd
+
+    date_df["Date_str"] = date_df["Date"].dt.strftime("%Y-%m-%d")
+    date_class_map = dict(zip(date_df["Date_str"], date_df[f"{country}_Workday_Type"]))
+
+    file_paths = sorted(meshes_path.glob("*.gpkg"))
+    day_classes = set(date_df[f"{country}_Workday_Type"])
+    group_frames = {key: [] for key in day_classes}
+    actual_grid_id_col = "grid_id" if grid_id_col is None else grid_id_col
+
+    for fp in file_paths:
+        date_str = os.path.basename(fp).split(f"{city}-")[-1].split(".gpkg")[0]
+        group_key = date_class_map.get(date_str)
+
+        if group_key not in group_frames:
+            raise KeyError(f"Date '{date_str}' not found in date table or has an unknown class.")
+
+        # Read specific layer if needed
+        if gpkg_layer:
+            gdf = gpd.read_file(fp, layer=gpkg_layer)
+        else:
+            gdf = gpd.read_file(fp)
+
+        if feature_col not in gdf.columns:
+            continue
+        if specify_date and date_str not in selected_dates:
+            continue
+
+        if grid_id_col is None:
+            gdf = gdf.reset_index(drop=True)
+            gdf["grid_id"] = gdf.index
+
+        gdf = gdf[[actual_grid_id_col, feature_col, "geometry"]]
+        group_frames[group_key].append(gdf)
+
+    mode_frames = {}
+
+    def mode(series):
+        return series.mode().iloc[0] if not series.mode().empty else pd.NA
+
+    for group_key, frames in group_frames.items():
+        if not frames:
+            raise ValueError(f"No files found for group '{group_key}'!")
+
+        stacked = pd.concat(frames, ignore_index=True)
+
+        mode_df = (
+            stacked.groupby(actual_grid_id_col, as_index=False)
+                   .agg({feature_col: mode})
+                   .rename(columns={feature_col: f"{group_key}_mode"})
+        )
+
+        geom_ref = frames[0][[actual_grid_id_col, "geometry"]]
+        mode_gdf = gpd.GeoDataFrame(
+            mode_df.merge(geom_ref, on=actual_grid_id_col, how="left"),
+            geometry="geometry",
+            crs=frames[0].crs
+        )
+
+        mode_frames[group_key] = mode_gdf
+
+    group_keys = list(mode_frames.keys())
+    final_gdf = mode_frames[group_keys[0]]
+    for key in group_keys[1:]:
+        final_gdf = final_gdf.merge(
+            mode_frames[key].drop(columns="geometry"),
+            on=actual_grid_id_col,
+            how="left"
+        )
+
+    output_path.mkdir(parents=True, exist_ok=True)
+    output_file = output_path / output_name
+    final_gdf.to_file(output_file, layer="mode_mesh", driver="GPKG")
+    print(f"Saved mode result to: {output_file}")
+
+    return final_gdf
