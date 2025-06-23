@@ -78,13 +78,13 @@ A consistent pattern is observed across both satellite products: surface tempera
 
 A subtle yet noticeable difference appears between workday and weekend temperatures, especially in the Aqua maps. Weekend heating is more intense, particularly over the central region and peripheral urban districts along the highway corridors. 
 
-The observed increase in temperature distribution across the city is largely attributed to anthropogenic factors (McCarthy, 2001). Migration, political centralisation, and economic opportunities within the city have led to rapid urbanisation and population growth, resulting in a decrease in vegetation and green spaces alongside increased human and vehicular activity, including commercial and transportation emissions. The high congestion in the city centre reflects the key urban challenges facing Ethiopia, where a combination of inadequate public transport systems, insufficient infrastructure for non-motorised transport, and unplanned spatial expansion causes the traffic congestion. (UN-Habitat, 2025).
+The observed increase in temperature distribution across the city is largely attributed to anthropogenic factors (McCarthy, 2001). Migration, political centralisation, and economic opportunities within the city have led to rapid urbanisation and population growth, resulting in a decrease in vegetation and green spaces alongside increased human and vehicular activity, including commercial and transportation emissions. The high congestion in the city centre reflects the key urban challenges facing Ethiopia, where a combination of inadequate public transport systems, insufficient infrastructure for non-motorised transport, and unplanned spatial expansion causes the traffic congestio (UN-Habitat, 2025).
 
 ### 4.1.8 Cloud Cover Category
 
-As illustrated in Figure 4.16, in both years, the southern and southeastern parts of the city consistently experience clearer skies, while the northern and central zones tend to be cloudier.
+As illustrated in Figure 4.17, in both years, the southern and southeastern parts of the city consistently experience clearer skies, while the northern and central zones tend to be cloudier.
 
-Cloud cover towards the north is influenced by a combination of factors related to the city's high altitude and the surrounding topography. The interaction of warm, moist air rising over the Ethiopian highlands can lead to condensation and cloud formation as warm, humid air is forced upwards by the terrain. The hills and mountains in the northern part of the city create a natural barrier for airflows, forcing warm, moist air upwards, causing it to cool and condense into clouds (Figure 4.17).
+Cloud cover towards the north is influenced by a combination of factors related to the city's high altitude and the surrounding topography. The interaction of warm, moist air rising over the Ethiopian highlands can lead to condensation and cloud formation as warm, humid air is forced upwards by the terrain. The hills and mountains in the northern part of the city create a natural barrier for airflows, forcing warm, moist air upwards, causing it to cool and condense into clouds (Figure 4.16).
 
 ![](/docs/images/EDA/fig14.png)
 
@@ -234,6 +234,6 @@ According to smoothed moving average modelling, the temporal dynamics of air pol
 
 The carbon monoxide concentration shows a moderately synchronised trend with NO<sub>2</sub> concentration in the latter part of 2023 and early 2024, particularly during periods of heightened winter emissions, reinforcing the likelihood of overlapping anthropogenic sources such as vehicular exhaust and heating-related combustion. 
 
-In contrast, the ozone concentration demonstrates a strong inverse relationship with NO<sub>2</sub>, particularly during the summer. This decrease in ozone may have been due to an increase in NOx produced by diesel generators during heat waves, which suppressed the production of ozone. The inverse trend in April, just before summer, may have resulted from the photochemical processes in which sunlight-driven ozone formation consumes NO<sub>2</sub>, especially under intense solar radiation.
+In contrast, the ozone concentration demonstrates a strong inverse relationship with NO<sub>2</sub>, particularly during the summer. This decrease in ozone may have been due to an increase in NO<sub>x</sub> produced by diesel generators during heat waves, which suppressed the production of ozone. The inverse trend in April, just before summer, may have resulted from the photochemical processes in which sunlight-driven ozone formation consumes NO<sub>2</sub>, especially under intense solar radiation.
 
 ![](/docs/images/EDA/fig32.png)
