@@ -34,7 +34,7 @@ As shown above, **removing NO₂ leads to a substantial decline in model perform
 Based on the best XGBoost model, the calculated SHAP values are visualized in the figure below.
 
 <p align="center">
-  <img src="../data/demo-data/Addis Ababa - SHAP Feature Impact - XGBoost.png" alt="SHAP Feature Impact" width="1000"/>
+  <img src="Addis Ababa - SHAP Feature Impact - XGBoost.png" alt="SHAP Feature Impact" width="1000"/>
 </p>
 
 <p align="center">
