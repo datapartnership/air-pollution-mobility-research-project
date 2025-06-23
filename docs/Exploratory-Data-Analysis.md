@@ -188,12 +188,13 @@ To explore interdependencies between different features, correlation matrices we
 
 We calculated pairwise Pearson correlation coefficients among the selected variables. The correlation matrix quantifies linear relationships, where values range from -1 (perfect negative) to +1 (perfect positive). Strong positive correlations suggest shared spatial patterns or common underlying causes. Weak or negative correlations may point to inverse relationships or independent dynamics.
 
-The resulting matrix is \textit{visualised} using heatmaps to facilitate interpretation. This allows us to:
-\begin{enumerate}
-    \item Identify variables with the strongest associations to NO\textsubscript{2}.
-    \item Detect multicollinearity, which informs feature selection in modeling.
-    \item Understand cross-variable interactions that shape pollution distribution.
-\end{enumerate}
+The resulting matrix is visualised using heatmaps to facilitate interpretation. This allows us to:
+
+1.	Identify variables with the strongest associations to NO2.
+
+2.	Detect multicollinearity, which informs feature selection in modeling.
+
+3.	Understand cross-variable interactions that shape pollution distribution.
 
 This correlation analysis supports subsequent explanatory modeling and helps prioritise key predictors for intervention or policy consideration. The results are attached in the Appendix as Figures 5 and 6.
 
