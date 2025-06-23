@@ -112,7 +112,7 @@ Workday averages consistently show higher NO₂ levels around the city centre, r
 
 As highlighted in Figure 4.20, the central region is the city of Baghdad. It is the capital and largest city of Iraq and thus, the nation’s economic hub. The green spot in the figure indicates Baghdad International Airport (BGW). As shown in Figure 4.21, moving towards the south from the city centre is a major mobility corridor formed by the Baghdad–Basra Railway Line, and Highway 8 and Motorway 1 (M1) which connect Baghdad to Kuwait. The figure also shows Highway 6 which goes from the city centre towards the southeast to Al Kut and connects Baghdad to Tehran. 
 
-![](/docs/images/EDA/fig18.png)
+![](/docs/images/EDA/fig18.jpg)
 
 As shown in Figure 4.19, the highest NO<sub>2</sub> concentrations are observed in Baghdad city centre; where most of the urban activity is concentrated. Considerable emissions are also observed as we move towards the southeast, along the Highway 6 corridor. Similar to Addis Ababa, there is a slight variation in emissions for weekdays and weekends. The reasons for this variation may also be similar. 
 
