@@ -18,5 +18,9 @@ parts:
       - file: docs/presenting-results.md
       - file: docs/notebooks-workflows.md
       - file: docs/git-workflows.md
-
-      
+  - caption: Data Analysis
+    chapters:
+      - file: docs/Exploratory-Data-Analysis.md
+  - caption: Modelling Results
+    chapters:
+      - file: docs/Results-And-Discussion.md   
