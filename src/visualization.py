@@ -645,6 +645,7 @@ def plot_corr_matrix(
         cols_of_interest: List[str], 
         output_path: Path, 
         plot_name: str,
+        figsize: Tuple[int, int] = (15, 12),
 ): 
     """
     Generate and save a Pearson correlation heatmap for selected features.
@@ -679,11 +680,11 @@ def plot_corr_matrix(
     corr_matrix = df_subset.corr()
 
     # Plot and save heatmap
-    plt.figure(figsize=(15, 12))
+    plt.figure(figsize=figsize)
     sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap="coolwarm", square=True)
     plt.title(plot_name, fontsize=16)
     plt.tight_layout()
-    plt.savefig(output_path / f'{plot_name}.png', dpi=300)
+    plt.savefig(output_path / f'{plot_name}.png', dpi=700)
     plt.show()
 
     print(f"Heatmap saved to {output_path / f'{plot_name}.png'}")
@@ -758,7 +759,7 @@ def plot_mean_pacf(
     # Add legend and adjust layout
     ax.legend()
     fig.tight_layout()
-    plt.savefig(output_path / f'{pacf_title}.png', dpi=300)
+    plt.savefig(output_path / f'{pacf_title}.png', dpi=700)
     plt.show()
     print(f"Figure saved to {output_path}")
 
@@ -882,8 +883,16 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from matplotlib.patches import Patch
 
-
-def plot_cloud_category(mesh_grid_path, title):
+def plot_cloud_category(
+    mesh_grid_path,
+    feature_col,
+    title,
+    ax: Optional[plt.Axes] = None,
+    category_colors=None,
+    category_labels=None,
+    figsize: Tuple[int, int] = (8, 6),
+    show_edges=False 
+):
     import geopandas as gpd
     import matplotlib.pyplot as plt
     import matplotlib.colors as mcolors
@@ -891,42 +900,50 @@ def plot_cloud_category(mesh_grid_path, title):
 
     mesh_grid = gpd.read_file(mesh_grid_path)
 
-    category_colors = {
+    categories = sorted(mesh_grid[feature_col].dropna().unique())
+
+    # Default for cloud_category
+    default_colors = {
         0: "skyblue",      # Clear
         1: "gray",         # Cloudy
         2: "orange",       # Mixed
-        3: "lightgreen"    # Not set (assumed clear)
+        3: "lightgreen"    # Not set
     }
-    category_labels = {
+    default_labels = {
         0: "0 - Clear",
         1: "1 - Cloudy",
         2: "2 - Mixed",
         3: "3 - Not set (assumed clear)"
     }
 
-    cloud_cmap = mcolors.ListedColormap([category_colors[k] for k in category_colors])
-    bounds = [-0.5, 0.5, 1.5, 2.5, 3.5]
-    norm = mcolors.BoundaryNorm(bounds, cloud_cmap.N)
+    category_colors = category_colors or {k: default_colors.get(k, "lightgray") for k in categories}
+    category_labels = category_labels or {k: default_labels.get(k, str(k)) for k in categories}
 
-    fig, ax = plt.subplots(figsize=(10, 10))
+    cmap = mcolors.ListedColormap([category_colors[k] for k in categories])
+    bounds = [k - 0.5 for k in categories] + [categories[-1] + 0.5]
+    norm = mcolors.BoundaryNorm(bounds, cmap.N)
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+        
     mesh_grid.plot(
-        column="cloud_category",
-        cmap=cloud_cmap,
+        column=feature_col,
+        cmap=cmap,
         norm=norm,
-        linewidth=0.2,
-        edgecolor="white",
+        linewidth=0 if not show_edges else 0.2,
+        edgecolor="white" if show_edges else None,
         ax=ax
     )
 
     legend_elements = [
         Patch(facecolor=category_colors[k], edgecolor='black', label=category_labels[k])
-        for k in sorted(category_colors)
+        for k in categories
     ]
-    
-    ax.legend(handles=legend_elements, title="Cloud Category", loc="lower left")
+    ax.legend(handles=legend_elements, title=feature_col, loc="lower left")
     ax.set_title(title, fontsize=12)
     ax.axis("off")
-    
+
+
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -1008,6 +1025,8 @@ def plot_cloud_category_raster(
     # === Create figure and axis ===
     if ax is None:
         _, ax = plt.subplots(figsize=(6, 6))
+    else:
+        fig = ax.figure
 
     imshow_kwargs = imshow_kwargs or {}
     cmap.set_bad(color="white")  # Set background to white
@@ -1082,7 +1101,7 @@ def plot_filled_vs_original_raster(
     plt.tight_layout()
 
     if output_image:
-        plt.savefig(output_image, dpi=300)
+        plt.savefig(output_image, dpi=700)
         print(f"Saved image to: {output_image.name}")
 
     plt.show()
