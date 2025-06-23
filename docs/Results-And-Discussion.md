@@ -70,7 +70,7 @@ The results obtained from the OLS model for the top contributors to TCI are as o
 
 To make this interpretable in relative terms, we compute a point elasticity:
 
-$\varepsilon_{NO<sub>2</sub>, TCI} = \beta_{NO} \frac{\bar{x}}{\bar{y}} \approx 0.25$
+$$\varepsilon_{NO<sub>2</sub>, TCI} = \beta_{NO} \frac{\bar{x}}{\bar{y}} \approx 0.25$$
 
 For a typical Baghdad district and month, a 1% increase in average NO<sub>2</sub> concentration is associated with roughly a 0.25% increase in total monthly congestion (TCI). Because the regression is in levels, this 0.25 figure is a local effect, it holds near current mean conditions. Elasticity would vary in areas with very different baseline pollution or congestion levels.
 
