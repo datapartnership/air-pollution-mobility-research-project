@@ -33,13 +33,7 @@ As shown above, **removing NO₂ leads to a substantial decline in model perform
 
 Based on the best XGBoost model, the calculated SHAP values are visualized in the figure below.
 
-<p align="center">
-  <img src="../docs/notebooks-readme/06_addis_ababa_industrial_production_model_files/Addis_Ababa_SHAP_Feature_Impact_XGBoost.png" alt="SHAP Feature Impact" width="1000"/>
-</p>
-
-<p align="center">
-  <em>SHAP Feature Impact XGB Model Results for Addis Ababa</em>
-</p>
+![png](06_addis_ababa_industrial_production_model_files/Addis_Ababa_SHAP_Feature_Impact_XGBoost.png)
 
 `NO₂_Level` (nitrogen dioxide concentration) is the most important feature in the model, ranking first in the chart. Its SHAP values are distributed in both positive and negative directions, indicating a significant and bidirectional impact on predictions. 
 This aligns with the fact that NO₂ mainly comes from industrial and traffic emissions, and higher concentrations reflect more active economic activity. In comparison, Nighttime_Light and POI_Count, as traditional proxies for economic activity, have some explanatory power but their influence is slightly weaker than NO₂. Road_Length and Population are also important, with the impact of Road_Length close to that of NO₂. Different land use types (industrial, commercial, residential) have relatively small effects, suggesting that single land use types have limited predictive power for economic activity and need to be combined with other features.
