@@ -254,6 +254,7 @@ def plot_mesh(
     axis_off: bool = True,  
     show_edges: bool = True,
     edgecolor: str = "grey",
+    cmap: str = "viridis",  # <== 新增参数
     figsize: Tuple[int, int] = (8, 6),
     show: bool = True,
     **plot_kwargs
@@ -273,11 +274,16 @@ def plot_mesh(
         Axes object to plot on. If None, a new figure and axes are created.
     axis_off : bool, default True
         Whether to hide the plot axis.
+    show_edges : bool, default True
+        Whether to show polygon edges.
+    edgecolor : str, default "grey"
+        Color of the polygon edges if shown.
+    cmap : str, default "viridis"
+        The colormap to use for the feature coloring.
     figsize : tuple, default (8, 6)
         Size of the figure (width, height).
     show : bool, default True
-        Whether to display the figure with plt.show(). 
-        If plotting multiple axes, set show=False to make sure everyone can be displayed.
+        Whether to display the figure with plt.show().
     **plot_kwargs :
         Additional keyword arguments passed to `GeoDataFrame.plot()`.
 
@@ -289,11 +295,15 @@ def plot_mesh(
     if ax is None:
         fig, ax = plt.subplots(figsize=figsize)
 
-    mesh.plot(column=feature, 
-              cmap="viridis",
-              edgecolor=edgecolor if show_edges else None,
-              legend=True, 
-              ax=ax, **plot_kwargs)
+    mesh.plot(
+        column=feature,
+        cmap=cmap,
+        edgecolor=edgecolor if show_edges else None,
+        legend=True,
+        ax=ax,
+        **plot_kwargs
+    )
+
     ax.set_title(title)
     
     if axis_off:
