@@ -1,0 +1,534 @@
+from collections import defaultdict
+from statsmodels.tsa.stattools import pacf
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+import pandas as pd
+import numpy as np
+import geopandas as gpd
+from pathlib import Path
+
+def compute_pacf(
+        data_folder: Path, 
+        nlags: int = 20, 
+        column_name: str = 'no2_mean',
+        pacf_title: str = "Mean PACF across all geom_ids"
+):
+    """
+    Reads all .gpkg files in the given folder, extracts the specified field for each mesh cell over time,
+    computes the PACF for each cell, and plots the average PACF curve across all cells.
+
+    Parameters
+    -----------
+    data_folder: Path
+        Path to the folder containing GPKG files.
+    nlags: int
+        Maximum number of lags for PACF.
+    column_name: str 
+        Name of the column to analyze (e.g., "no2_mean").
+
+    Returns
+    -------
+    pacf_all: np.ndarray
+        All PACF values of all mesh cells.
+
+    Usage
+    -----
+    >>> data_folder = DATA_PATH / "addis-mesh-data"
+    >>> all_pacf = compute_and_plot_mean_pacf(data_folder, nlags=20, column_name='no2_mean')
+
+    """
+    # Load all GPKG files
+    gpkg_files = sorted(data_folder.glob('*.gpkg'))
+    gdfs = []
+
+    for file in tqdm(gpkg_files, desc="Reading GPKG files"):
+        try:
+            gdf = gpd.read_file(file)
+            gdfs.append(gdf)
+        except Exception as e:
+            print(f"Failed to read {file}, error: {e}")
+
+    # Build time series for each geom_id
+    series_dict = defaultdict(list)
+    for gdf in gdfs:
+        for _, row in gdf.iterrows():
+            geom_id = row['geom_id']
+            value = row[column_name]
+            series_dict[geom_id].append(value)
+
+    # Convert to DataFrame: each column = one geom_id, each row = one day
+    df = pd.DataFrame(series_dict)
+    df = df.interpolate(limit_direction='both')     # Fill missing values if any
+
+    # Compute PACF for each geom_id
+    pacf_all = []
+    for geom_id in tqdm(df.columns, desc="Calculating PACF for each geom_id"):
+        series = df[geom_id].values
+        if np.isnan(series).any():
+            continue  # Skip if NaNs remain
+        try:
+            pacf_vals = pacf(series, nlags=nlags, method='ols')
+            pacf_all.append(pacf_vals)
+        except Exception as e:
+            print(f"PACF failed for geom_id {geom_id}: {e}")
+
+    if not pacf_all:
+        print("No PACF values computed. All time series may have issues.")
+        return None
+
+    # Convert to numpy array and compute mean PACF across all cells
+    pacf_all = np.array(pacf_all)
+    return pacf_all
+
+
+import numpy as np
+import pandas as pd
+import geopandas as gpd
+from typing import List
+pd.set_option('future.no_silent_downcasting', True)
+
+def average_mesh_over_time(gdfs: List[gpd.GeoDataFrame]) -> gpd.GeoDataFrame:
+    """
+    Calculate the temporal average of numerical features from a list of GeoDataFrames (meshes).
+    
+    Parameters
+    -----------
+    gdfs : list of GeoDataFrame
+        Each GeoDataFrame represents a mesh at a different time point. 
+        All GeoDataFrames must have the same geometry and ordering.
+    
+    Returns
+    --------
+    mean_gdf : GeoDataFrame
+        A GeoDataFrame representing the spatial mesh with numerical features averaged over time.
+        The 'geom_id' and 'geometry' columns are taken from the first input GeoDataFrame.
+
+    Usage
+    ------
+    >>> mean_mesh = average_mesh_over_time(gdfs)
+    """
+
+    numeric_cols = gdfs[0].select_dtypes(include=[np.number]).columns.tolist()
+    if "geom_id" in numeric_cols:
+        numeric_cols.remove("geom_id")
+
+    cleaned_arrays = []
+    for gdf in gdfs:
+        # select only the valid columns
+        valid_cols = [col for col in numeric_cols if col in gdf.columns]
+        
+        temp_data = pd.DataFrame(columns=numeric_cols)
+        for col in numeric_cols:
+            if col in gdf.columns:
+                temp_data[col] = gdf[col]
+            else:
+                temp_data[col] = np.nan
+        
+        temp_data = temp_data.replace({None: np.nan}).infer_objects(copy=False)
+        cleaned_arrays.append(temp_data.values)
+    
+    data_matrix = np.array(cleaned_arrays)
+    mean_data = np.nanmean(data_matrix, axis=0)
+
+    mean_gdf = gdfs[0][["geom_id", "geometry"]].copy()
+    mean_gdf[numeric_cols] = mean_data
+
+    return mean_gdf
+
+
+import warnings
+from libpysal.weights import KNN
+from esda import Moran_Local
+import matplotlib.pyplot as plt
+import geopandas as gpd
+from pathlib import Path
+from typing import Optional
+
+def compute_plot_local_moran(
+    gdf: gpd.GeoDataFrame,
+    output_path: Path,
+    feature_col: str,
+    k_neighbors: int = 8,
+    alpha: float = 0.05,
+    plot_title: str = None,
+    if_emphasize: bool = True,
+    cmap: str = "hot_r",
+    figsize: tuple = (10, 8),
+    show_plot: bool = True,
+    ax: Optional[plt.Axes] = None,
+    **plot_kwargs
+) -> gpd.GeoDataFrame:
+    """
+    Compute Local Moran's I statistic for a numeric feature in a GeoDataFrame and visualize it.
+    
+    Parameters
+    ----------
+    gdf : GeoDataFrame
+        Input spatial data. Must contain geometry and the specified numeric feature column.
+    feature_col : str
+        The column name of the numeric feature to analyze.
+    k_neighbors : int, optional
+        Number of nearest neighbors used to construct the spatial weight matrix (default is 8).
+    alpha : float, optional
+        Significance level used to identify statistically significant clusters (default is 0.05).
+    plot_title : str, optional
+        Title of the output plot. Defaults to "Local Moran's I (feature_col)".
+    cmap : str, optional
+        Colormap used for plotting the Local Moran's I values (default is "hot_r").
+    figsize : tuple, optional
+        Size of the output figure (default is (10, 8)).
+    show_plot : bool, optional
+        Whether to display the plot immediately (default is True).
+    
+    Returns
+    -------
+    gdf_result : GeoDataFrame
+        The original GeoDataFrame with added columns:
+        - 'local_I': Local Moran's I value for each feature.
+        - 'p_sim': P-value from the permutation test.
+        - 'significant': Boolean indicating statistical significance (p < alpha).
+    """
+    
+    # Construct K-Nearest Neighbors weight matrix
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        w = KNN.from_dataframe(gdf, k=k_neighbors)
+    w.transform = 'r'  # Row-standardized weights
+
+    # Extract the feature values
+    x = gdf[feature_col].values
+
+    # Calculate Local Moran's I
+    moran_local = Moran_Local(x, w)
+
+    # Copy the original GeoDataFrame and append results
+    gdf_result = gdf.copy()
+    gdf_result["local_I"] = moran_local.Is
+    gdf_result["p_sim"] = moran_local.p_sim
+    gdf_result["significant"] = moran_local.p_sim < alpha
+
+    # Set default plot title if none is given
+    if plot_title is None:
+        plot_title = f"Local Moran's I ({feature_col})"
+
+    # Create plot
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=figsize)
+    
+    gdf_result.plot(column="local_I", cmap=cmap, legend=True, ax=ax, **plot_kwargs)
+
+    # Outline statistically significant areas
+    if if_emphasize:
+        sig = gdf_result[gdf_result["significant"]]
+        if not sig.empty:
+            sig.boundary.plot(ax=ax, color='black', linewidth=1)
+
+    ax.set_title(plot_title)
+    ax.set_axis_off()
+    plt.savefig(output_path / f'{plot_title}.png', dpi=300)
+    print(f"Figure saved to {output_path}")
+
+    if show_plot:
+        plt.show()
+
+    # return gdf_result
+
+import matplotlib.pyplot as plt
+
+def plot_xgb_training_curve(evals_result):
+    plt.plot(evals_result['train']['rmse'], label='Train RMSE')
+    plt.plot(evals_result['eval']['rmse'], label='Eval RMSE')
+    plt.xlabel('Iteration')
+    plt.ylabel('RMSE (scaled)')
+    plt.title('XGBoost Training Progress')
+    plt.legend()
+    plt.show()
+
+
+def plot_xgb_feature_importance(model, features, importance_type:str = 'weight'):
+
+    importance_dict = model.get_score(importance_type=importance_type)  # default: weight
+    importances = [(feat, importance_dict.get(feat, 0)) for feat in features]
+    importances.sort(key=lambda x: x[1], reverse=True)
+
+    print("Feature Importances:")
+    for feat, score in importances:
+        print(f"{feat}: {score}")
+
+    plt.figure(figsize=(10, 6))
+    plt.barh([i[0] for i in importances][::-1], [i[1] for i in importances][::-1])
+    plt.xlabel("Feature Importance (weight)")
+    plt.title("XGBoost Feature Importance")
+    plt.tight_layout()
+    plt.show()
+
+
+import warnings
+from datetime import timedelta
+from libpysal.weights import KNN
+
+def add_lag_features(full_df, output_path: Path, file_name: str, k_neighbors=8) -> None:
+    """
+    Add lagged NO2 features to the DataFrame by performing the following steps:
+
+    1. Calculate the previous day's NO2 values for each location (geom_id).
+    2. Compute the previous day's average NO2 values of spatial neighbors for each location.
+    3. Save the resulting DataFrame with these new features as a _parquet_ file.
+
+    Parameters:
+        full_df (pd.DataFrame): 
+            DataFrame containing at least ['geom_id', 'date', 'no2_mean'] columns.
+        output_path (Path): 
+            Directory where the output parquet file will be saved.
+        file_name (str): 
+            Name of the output parquet file (without extension).
+        k_neighbors (int, optional): 
+            Number of spatial neighbors to consider for lag calculation. Default is 8.
+
+    Returns:
+        pd.DataFrame: 
+            The input DataFrame with two new columns added:
+            'no2_lag1' - previous day's NO2 value for the same geom_id,
+            'no2_neighbor_lag1' - previous day's average NO2 of spatial neighbors.
+
+    Side Effects:
+        Saves the augmented DataFrame to '{output_path}/{file_name}.parquet' 
+        using PyArrow engine with Snappy compression.
+    """
+
+    # Sort DataFrame by geom_id and date
+    full_df = full_df.sort_values(["geom_id", "date"]).copy()
+
+    # Add previous day's no2_mean for each geom_id
+    full_df["no2_lag1"] = full_df.groupby("geom_id")["no2_mean"].shift(1)
+
+    # Use the earliest date's data to construct neighbor relationships
+    sample_gdf = full_df[full_df['date'] == full_df['date'].min()].reset_index(drop=True)
+
+    # Suppress warnings from libpysal
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        w = KNN.from_dataframe(sample_gdf, k=k_neighbors)
+
+    w.transform = 'r'  # Row-standardization
+
+    # Create a mapping from geom_id to its neighbors' geom_ids
+    index_to_geom_id = dict(sample_gdf['geom_id'].items())
+    geom_id_to_neighbors = {
+        index_to_geom_id[i]: [index_to_geom_id[j] for j in neighbors]
+        for i, neighbors in w.neighbors.items()
+    }
+
+    # Create a dictionary of DataFrames grouped by date for quick access
+    df_by_date = {d: gdf for d, gdf in full_df.groupby("date")}
+
+    def compute_neighbor_no2(row):
+        date = row["date"]
+        geom_id = row["geom_id"]
+        prev_date = date - timedelta(days=1)
+        if prev_date not in df_by_date:
+            return None
+        prev_day_df = df_by_date[prev_date]
+        neighbors = geom_id_to_neighbors.get(geom_id, [])
+        values = prev_day_df[prev_day_df["geom_id"].isin(neighbors)]["no2_mean"]
+        return values.mean() if not values.empty else None
+
+    # Calculate previous day's mean NO2 for neighboring locations
+    full_df["no2_neighbor_lag1"] = full_df.apply(compute_neighbor_no2, axis=1)
+
+    full_df.to_parquet(output_path / f"{file_name}.parquet", engine="pyarrow", compression="snappy")
+
+    return full_df
+
+
+import shap
+import xgboost as xgb
+from sklearn.pipeline import Pipeline
+import shap
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ========== SHAP Visualization Function ==========
+def explain_shap_rf(
+    pipeline:Pipeline,
+    X_background: pd.DataFrame,
+    X_eval: pd.DataFrame,
+    output_path: Path,
+    max_display: int = 15,
+    clip_range: tuple = (-2e-5, 1.5e-5),
+    plot_title: str = "SHAP Feature Impact on Model Output",
+    if_save: bool = True
+) -> tuple[shap.TreeExplainer, shap.Explanation]:
+    """
+    Returns SHAP TreeExplainer and Explanation object, and plots bar (optional) + beeswarm charts.
+    Supports sklearn.pipeline.Pipeline by extracting the final model automatically.
+    """
+    # extract the model
+    model = pipeline.steps[-1][1]
+
+    # create explainer
+    explainer = shap.TreeExplainer(
+        model,
+        data=X_background,
+        feature_perturbation="interventional"
+    )
+    shap_exp = explainer(X_eval)
+
+    if max_display > 0:
+        shap_values_clipped = np.clip(shap_exp.values, clip_range[0], clip_range[1])
+        shap_exp.values = shap_values_clipped
+
+        # plot bar chart
+        # shap.plots.bar(shap_exp, max_display=max_display)
+
+        # plot beeswarm chart
+        shap.summary_plot(shap_values_clipped, X_eval, max_display=max_display, show=False)
+        plt.title(plot_title, fontsize=14)
+        plt.gcf().set_size_inches(12, 6)
+        plt.tight_layout()
+        if if_save:
+            plt.savefig(output_path / f"{plot_title}.png", dpi=700)    
+        plt.show() 
+        plt.close()
+
+    return explainer, shap_exp
+
+def explain_shap_xgb(
+    model: xgb.Booster,
+    X_background: pd.DataFrame,
+    X_eval: pd.DataFrame,
+    output_path: Path,
+    max_display: int = 15,
+    clip_range: tuple = (-2e-5, 1.5e-5),
+    plot_title: str = "SHAP Feature Impact on Model Output",
+    if_save: bool = True
+) -> tuple[shap.TreeExplainer, shap.Explanation]:
+    """
+    Returns SHAP TreeExplainer and Explanation object, and plots bar (optional) + beeswarm charts.
+    Supports sklearn.pipeline.Pipeline by extracting the final model automatically.
+    """
+    # explainer = shap.TreeExplainer(model, data=X_test_sample,)
+    # shap_exp = explainer(X_eval)
+
+    explainer = shap.TreeExplainer(
+        model,
+        data=X_background,
+        feature_perturbation="interventional"
+    )
+    shap_exp = explainer(X_eval)
+    
+    if max_display > 0:
+        shap_values_clipped = np.clip(shap_exp.values, clip_range[0], clip_range[1])
+        shap_exp.values = shap_values_clipped
+
+        # plot bar chart
+        # shap.plots.bar(shap_exp, max_display=max_display)
+
+        # plot beeswarm chart
+        shap.summary_plot(shap_values_clipped, X_eval, max_display=max_display, show=False)
+        plt.title(plot_title, fontsize=14)
+        plt.gcf().set_size_inches(12, 6)
+        plt.tight_layout()
+        if if_save:
+            plt.savefig(output_path / f"{plot_title}.png", dpi=700)    
+        plt.show()  
+        plt.close()
+
+    return explainer, shap_exp
+
+# ========== SHAP-based Approximate Elasticity Computation ==========
+
+def compute_elasticities_shap_rf(
+    pipeline: Pipeline,
+    shap_exp: shap.Explanation,
+    low_q: float = 0.25,
+    high_q: float = 0.75
+) -> pd.DataFrame:
+    """
+    Estimates elasticity coefficients for each feature using:
+    eᵢ = medianₘ [(ϕᵢₘ / ŷₘ) * (xᵢₘ / Δxᵢ)],
+    where Δxᵢ is the interquartile range.
+    """
+    # 1. Extract data and SHAP values
+    X = pd.DataFrame(shap_exp.data, columns=shap_exp.feature_names)
+    shap_vals = shap_exp.values
+    y_hat = pipeline.predict(X.values)
+
+    # 2. build a boolean mask: keep rows with finite values everywhere
+    mask = (
+        np.isfinite(y_hat) &
+        np.isfinite(shap_vals).all(axis=1) &
+        np.isfinite(X).all(axis=1)
+    )
+    X = X.loc[mask].reset_index(drop=True)
+    shap_vals = shap_vals[mask]
+    y_hat = y_hat[mask]
+
+    # 3. Compute interquartile range for each feature
+    qs = X.quantile([low_q, high_q])
+    dx = qs.loc[high_q] - qs.loc[low_q]
+    dx.replace(0, 1e-8, inplace=True)            # avoid /0
+    dx.fillna(1e-8, inplace=True)                # avoid NaN
+
+    # 4. Compute relative elasticities
+    rels = (shap_vals / y_hat[:, None]) * (X.values / dx.values[None, :])
+
+    # 5. Construct elasticity summary DataFrame
+    elas = pd.DataFrame({
+        "feature": X.columns,
+        "median_elasticity": np.median(rels, axis=0),
+        "p10": np.percentile(rels, 10, axis=0),
+        "p90": np.percentile(rels, 90, axis=0),
+    })
+
+    return elas.sort_values("median_elasticity", ascending=False)
+
+
+def compute_elasticities_shap_xgb(
+    model: xgb.Booster,
+    shap_exp: shap.Explanation,
+    low_q: float = 0.25,
+    high_q: float = 0.75
+) -> pd.DataFrame:
+    """
+    Estimates elasticity coefficients for each feature using:
+    eᵢ = medianₘ [(ϕᵢₘ / ŷₘ) * (xᵢₘ / Δxᵢ)],
+    where Δxᵢ is the interquartile range.
+    """
+    # 1. Extract data and SHAP values
+    X = pd.DataFrame(shap_exp.data, columns=shap_exp.feature_names)
+    shap_vals = shap_exp.values
+
+    dmatrix = xgb.DMatrix(X, feature_names=list(X.columns))
+    y_hat = model.predict(dmatrix)
+
+    # 2. build a boolean mask: keep rows with finite values everywhere
+    mask = (
+        np.isfinite(y_hat) &
+        np.isfinite(shap_vals).all(axis=1) &
+        np.isfinite(X).all(axis=1)
+    )
+    X = X.loc[mask].reset_index(drop=True)
+    shap_vals = shap_vals[mask]
+    y_hat = y_hat[mask]
+
+    # 3. Compute interquartile range for each feature
+    qs = X.quantile([low_q, high_q])
+    dx = qs.loc[high_q] - qs.loc[low_q]
+    dx.replace(0, 1e-8, inplace=True)            # avoid /0
+    dx.fillna(1e-8, inplace=True)                # avoid NaN
+
+    # 4. Compute relative elasticities
+    rels = (shap_vals / y_hat[:, None]) * (X.values / dx.values[None, :])
+
+    # 5. Construct elasticity summary DataFrame
+    elas = pd.DataFrame({
+        "feature": X.columns,
+        "median_elasticity": np.median(rels, axis=0),
+        "p10": np.percentile(rels, 10, axis=0),
+        "p90": np.percentile(rels, 90, axis=0),
+    })
+
+    return elas.sort_values("median_elasticity", ascending=False)
+
+
