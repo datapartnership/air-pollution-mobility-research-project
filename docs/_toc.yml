@@ -18,5 +18,21 @@ parts:
       - file: docs/presenting-results.md
       - file: docs/notebooks-workflows.md
       - file: docs/git-workflows.md
-
-      
+  - caption: Data Analysis
+    chapters:
+      - file: docs/notebooks-readme/01_air_pollution_data_preparation.md
+      - file: docs/notebooks-readme/02_related_features_preparation.md
+      - file: docs/notebooks-readme/03_dataset_integration.md
+      - file: docs/notebooks-readme/04_exploratory_data_analysis.md
+      - file: docs/Exploratory-Data-Analysis.md
+  - caption: Models
+    chapters:
+      - file: docs/notebooks-readme/05_no2_explanatory_model.md
+      - file: docs/notebooks-readme/06_addis_ababa_industrial_production_model.md  
+      - file: docs/notebooks-readme/07_baghdad_congestion_model.md
+  - caption: Modelling Results
+    chapters:
+      - file: docs/Results-And-Discussion.md  
+  - caption: Appendix
+    chapters:
+      - file: docs/notebooks-readme/appendix.md
